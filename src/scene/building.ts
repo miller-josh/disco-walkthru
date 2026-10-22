@@ -9,6 +9,7 @@ export const DEFAULT_WINDOW_SILL = 36;
 export const DEFAULT_WINDOW_HEAD = 84;
 export const DEFAULT_SOFFIT_DROP = 12;
 export const DEFAULT_OPENING_DEPTH = 24;
+export const DEFAULT_BEAM = { length: 120, width: 6, depth: 12 };
 
 export interface Bounds {
   minX: number;
@@ -37,6 +38,10 @@ export interface BuildingModel {
   soffits: { id: string; height: number; center: Pt }[];
   walls: { id: string; label?: string; height: number; center: Pt }[];
   sections: { id: string; height: number; center: Pt }[];
+  /** Resolved beams: stand-ins filled in, with the underside and top heights. */
+  beams: { id: string; center: Pt; length: number; width: number; depth: number; bottom: number; top: number }[];
+  /** Beams, so they can be shown or hidden together. */
+  beamGroup: THREE.Group;
   /** Wall faces before openings are cut, as [x1, y1, x2, y2], for snapping new openings to a wall. */
   wallEdges: number[][];
   /** Outlines the item (opening) or tints its material (wall, section, soffit, ceiling). */
@@ -58,7 +63,7 @@ export interface OpeningInfo {
 
 /** What a clicked building mesh stands for. */
 export interface BuildingItemRef {
-  kind: 'wall' | 'section' | 'opening' | 'soffit' | 'ceiling';
+  kind: 'wall' | 'section' | 'opening' | 'soffit' | 'beam' | 'ceiling';
   id: string;
 }
 
@@ -145,14 +150,14 @@ export function buildBuilding(cfg: BuildingConfig, dxf: ParsedDxf): BuildingMode
   const openItems: OpenItem[] = [];
   const warnings = [...dxf.warnings];
 
-  const addLabel = (text: string | undefined, c: Pt, y: number) => {
+  const addLabel = (text: string | undefined, c: Pt, y: number, parent: THREE.Object3D = group) => {
     if (!text) return;
     const el = document.createElement('div');
     el.className = 'fx-label';
     el.textContent = text;
     const l = new CSS2DObject(el);
     l.position.set(c.x, y, -c.y);
-    group.add(l);
+    parent.add(l);
   };
 
   const ceilingH = cfg.ceilingHeight ?? DEFAULT_CEILING;
@@ -367,6 +372,33 @@ export function buildBuilding(cfg: BuildingConfig, dxf: ParsedDxf): BuildingMode
     extrude([[toRing(s.outline)]], Math.max(0, h), ceilingH, matFor(ref, placeholder ? 0xf0b36a : 0xc9c4b8, placeholder), 0x6f6b61, group, pickables, ref);
   }
 
+  // ---- Beams: boxes under the ceiling. Missing sizes get stand-ins and an open item. ----
+  const beamGroup = new THREE.Group();
+  const beamInfo: BuildingModel['beams'] = [];
+  for (const b of cfg.beams ?? []) {
+    const length = b.length ?? DEFAULT_BEAM.length;
+    const width = b.width ?? DEFAULT_BEAM.width;
+    const depth = b.depth ?? DEFAULT_BEAM.depth;
+    const bottom = b.bottom ?? ceilingH - depth;
+    const top = bottom + depth;
+    const missing = [b.length == null && 'length', b.width == null && 'width', b.depth == null && 'depth'].filter(Boolean) as string[];
+    const placeholder = missing.length > 0;
+    const ref: BuildingItemRef = { kind: 'beam', id: b.id };
+    if (placeholder) openItems.push({ id: b.id, kind: 'beam', label: `Beam "${b.label || b.id}"`, missing });
+    const c = { x: b.x, y: b.y };
+    beamInfo.push({ id: b.id, center: c, length, width, depth, bottom, top });
+    const geo = new THREE.BoxGeometry(length, depth, width);
+    const mesh = new THREE.Mesh(geo, matFor(ref, placeholder ? 0xf0b36a : 0xb59a76, placeholder));
+    mesh.position.set(c.x, bottom + depth / 2, -c.y);
+    mesh.rotation.y = (b.angle * Math.PI) / 180;
+    mesh.userData.item = ref;
+    mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0x6f5a3c })));
+    beamGroup.add(mesh);
+    pickables.push(mesh);
+    addLabel(b.label, c, bottom - 6, beamGroup);
+  }
+  group.add(beamGroup);
+
   // ---- Floor with a 1 ft grid ----
   const w = bounds.maxX - bounds.minX;
   const d = bounds.maxY - bounds.minY;
@@ -410,6 +442,8 @@ export function buildBuilding(cfg: BuildingConfig, dxf: ParsedDxf): BuildingMode
     openings: resolved.map(({ placeholder: _p, footprint: _f, ...info }) => info),
     removedOpenings,
     soffits: soffitInfo,
+    beams: beamInfo,
+    beamGroup,
     walls: wallInfo,
     sections: sections.map((s) => ({ id: s.id, height: s.height, center: { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 } })),
     wallEdges,
