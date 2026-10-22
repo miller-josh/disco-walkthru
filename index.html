@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Disco Pizza Co. 3D Layout</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <div id="labels"></div>
+
+    <header id="topbar">
+      <div class="brand">Disco Pizza Co. <span>910 OH-28 layout</span></div>
+      <div class="group" id="modes">
+        <button data-mode="orbit" class="on" title="Rotate, pan and zoom around the building">Orbit</button>
+        <button data-mode="walk" title="Walk through at eye level">Walk</button>
+        <button data-mode="plan" title="Top-down plan view">Plan</button>
+      </div>
+      <div class="group" id="views"></div>
+      <div class="group">
+        <button id="measure" title="Click two points to measure the distance">Measure</button>
+        <button id="clear-measure" hidden>Clear</button>
+        <button id="copy-link" title="Copy a link to this exact view">Copy link</button>
+        <button id="help" title="Controls">?</button>
+        <button id="toggle-side" class="only-narrow">Layers</button>
+      </div>
+    </header>
+
+    <aside id="side">
+      <section>
+        <h2>Show</h2>
+        <div id="cats"></div>
+        <label class="row"><input type="checkbox" id="t-future" checked /> Future phase</label>
+        <label class="row"><input type="checkbox" id="t-labels" checked /> Labels</label>
+        <label class="row"><input type="checkbox" id="t-ceiling" /> Ceiling</label>
+      </section>
+      <section>
+        <h2>Open items <span id="open-count" class="badge"></span></h2>
+        <p class="muted">Values still marked TBD. Click one to find it.</p>
+        <ul id="open-items"></ul>
+      </section>
+    </aside>
+
+    <aside id="info" hidden>
+      <button id="info-close" aria-label="Close">×</button>
+      <h2 id="info-name"></h2>
+      <dl id="info-body"></dl>
+    </aside>
+
+    <div id="hint">
+      <button id="hint-close" aria-label="Hide tips">×</button>
+      <div id="hint-body"></div>
+    </div>
+    <div id="toast" hidden></div>
+    <div id="error" hidden></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
