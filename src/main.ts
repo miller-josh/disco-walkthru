@@ -147,6 +147,40 @@ function start() {
   const applyBeams = () => { building.beamGroup.visible = beamsChk.checked && rig.mode !== 'plan'; };
   beamsChk.addEventListener('change', applyBeams);
 
+  // Selected beams get a yellow handle at each end. Dragging one resizes the beam; it snaps to a wall face.
+  let handles: THREE.Mesh[] = [];
+  const beamAxis = (angle: number) => ({ x: Math.cos((angle * Math.PI) / 180), y: Math.sin((angle * Math.PI) / 180) });
+  function syncHandles() {
+    for (const h of handles) { scene.remove(h); h.geometry.dispose(); (h.material as THREE.Material).dispose(); }
+    handles = [];
+    if (sel?.kind !== 'beam') return;
+    const e = cfg.beams!.find((x) => x.id === sel!.id);
+    const r = building.beams.find((x) => x.id === sel!.id);
+    if (!e || !r || !building.beamGroup.visible) return;
+    const u = beamAxis(e.angle);
+    for (const s of [-1, 1]) {
+      const h = new THREE.Mesh(new THREE.BoxGeometry(8, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffc400, depthTest: false }));
+      h.renderOrder = 12;
+      h.position.set(r.center.x + (s * u.x * r.length) / 2, r.bottom + r.depth / 2, -(r.center.y + (s * u.y * r.length) / 2));
+      h.userData.end = s;
+      scene.add(h);
+      handles.push(h);
+    }
+  }
+  /** Distance from (x, y) along unit (dx, dy) to the nearest wall face, or null. */
+  function distToWall(x: number, y: number, dx: number, dy: number): number | null {
+    let best: number | null = null;
+    for (const [x1, y1, x2, y2] of building.wallEdges) {
+      const ex = x2 - x1, ey = y2 - y1;
+      const den = dx * ey - dy * ex;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = ((x1 - x) * ey - (y1 - y) * ex) / den;
+      const k = ((x1 - x) * dy - (y1 - y) * dx) / den;
+      if (t > 0.5 && k >= 0 && k <= 1 && (best === null || t < best)) best = t;
+    }
+    return best;
+  }
+
   // ---------- Edits: persistence and rebuilds ----------
   const save = () => {
     edited = true;
@@ -164,6 +198,7 @@ function start() {
     building.ceiling.visible = ceilingChk.checked;
     applyBeams();
     scene.add(building.group);
+    syncHandles();
     rig.setCollision(building.collision);
     building.highlight(sel && sel.kind !== 'fixture' ? sel : null);
   }
@@ -191,6 +226,7 @@ function start() {
     if (next?.kind === 'fixture' && !selected) sel = null;
     if (selected) setSelected(selected, true);
     building.highlight(next && next.kind !== 'fixture' ? next : null);
+    syncHandles();
     if (keepForm) {
       if (selected) $('info-name').textContent = selected.data.name;
     } else renderPanel();
@@ -307,8 +343,8 @@ function start() {
         row('Center Y', numIn('by', e.y)),
         row('Angle °', numIn('bangle', e.angle)),
         `<label class="full">Notes</label><textarea class="full" data-f="bnotes">${escapeHtml(e.notes ?? '')}</textarea>`,
-        `<div class="note">Length runs along Angle (0 = east-west, 90 = north-south). Width is across the beam, depth is how tall it is. Bottom is the underside above the floor; blank hangs the beam flush under the ceiling. Top is ${trim(r.top)} in.</div>`,
-        `<div class="actions"><button data-act="dup-beam">Duplicate</button><button data-act="del-beam" class="danger">Delete</button></div>`,
+        `<div class="note">Length runs along Angle (0 = east-west, 90 = north-south). Width is across the beam, depth is how tall it is. Bottom is the underside above the floor; blank hangs the beam flush under the ceiling. Top is ${trim(r.top)} in. Select the beam, then drag it to move it, or drag a yellow end handle to resize it (ends snap to walls; hold <b>Alt</b> to ignore walls, <b>Shift</b> for 6 in steps).</div>`,
+        `<div class="actions"><button data-act="beam-walls" title="Stretch both ends along the beam to the nearest wall faces">Extend to walls</button><button data-act="dup-beam">Duplicate</button><button data-act="del-beam" class="danger">Delete</button></div>`,
       ].join('');
       return;
     }
@@ -462,6 +498,17 @@ function start() {
       if (!confirm('Delete this beam?')) return;
       cfg.beams = cfg.beams!.filter((x) => x.id !== ref.id);
       sel = null;
+    } else if (act === 'beam-walls') {
+      const b = cfg.beams!.find((x) => x.id === ref.id);
+      if (!b) return;
+      const u = beamAxis(b.angle);
+      const fwd = distToWall(b.x, b.y, u.x, u.y);
+      const back = distToWall(b.x, b.y, -u.x, -u.y);
+      if (fwd == null || back == null) { toast('No wall found at both ends along this beam.'); return; }
+      b.length = Math.round(fwd + back);
+      const mid = (fwd - back) / 2;
+      b.x = Math.round((b.x + u.x * mid) * 10) / 10;
+      b.y = Math.round((b.y + u.y * mid) * 10) / 10;
     } else if (act === 'dup-beam') {
       const b = cfg.beams!.find((x) => x.id === ref.id);
       if (!b) return;
@@ -728,8 +775,23 @@ function start() {
   const ndc = (e: PointerEvent) => new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   let drag: { entry: FixtureEntry; dx: number; dz: number; sx: number; sy: number; moved: boolean } | null = null;
   let odrag: { id: string; sx: number; sy: number; moved: boolean; ghost: THREE.Mesh; at?: { x: number; y: number; angle: number } } | null = null;
+  let bdrag: { id: string; mode: 'move' | number; mesh: THREE.Mesh; dx: number; dz: number; sx: number; sy: number; moved: boolean; at?: { x: number; y: number; length?: number } } | null = null;
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || measure.active || splitStart || rig.mode === 'walk') return;
+    if (sel?.kind === 'beam') {
+      const r = building.beams.find((x) => x.id === sel!.id);
+      const mesh = building.pickables.find((m) => m.userData.item?.kind === 'beam' && m.userData.item.id === sel!.id) as THREE.Mesh | undefined;
+      if (!r || !mesh || !building.beamGroup.visible) return;
+      ray.setFromCamera(ndc(e), camera);
+      const hh = ray.intersectObjects(handles, false)[0];
+      const hit = hh ?? ray.intersectObject(mesh, false)[0];
+      if (!hit) return;
+      const p = new THREE.Vector3();
+      if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -(r.bottom + r.depth / 2)), p)) return;
+      bdrag = { id: r.id, mode: hh ? (hh.object.userData.end as number) : 'move', mesh, dx: mesh.position.x - p.x, dz: mesh.position.z - p.z, sx: e.clientX, sy: e.clientY, moved: false };
+      rig.orbit.enabled = false;
+      return;
+    }
     if (sel?.kind === 'opening') {
       const o = building.openings.find((x) => x.id === sel!.id);
       ray.setFromCamera(ndc(e), camera);
@@ -756,6 +818,42 @@ function start() {
     rig.orbit.enabled = false;
   }, true);
   addEventListener('pointermove', (e) => {
+    if (bdrag) {
+      if (!bdrag.moved && Math.hypot(e.clientX - bdrag.sx, e.clientY - bdrag.sy) < 4) return;
+      const r = building.beams.find((x) => x.id === bdrag!.id);
+      const cb = cfg.beams!.find((x) => x.id === bdrag!.id);
+      if (!r || !cb) return;
+      ray.setFromCamera(ndc(e), camera);
+      const p = new THREE.Vector3();
+      if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -(r.bottom + r.depth / 2)), p)) return;
+      bdrag.moved = true;
+      const step = e.shiftKey ? 6 : 1;
+      if (bdrag.mode === 'move') {
+        const x = Math.round((p.x + bdrag.dx) / step) * step;
+        const y = Math.round(-(p.z + bdrag.dz) / step) * step;
+        bdrag.at = { x, y };
+        bdrag.mesh.position.x = x;
+        bdrag.mesh.position.z = -y;
+      } else {
+        const s = bdrag.mode;
+        const u = beamAxis(cb.angle);
+        const fx = r.center.x - s * u.x * r.length / 2, fy = r.center.y - s * u.y * r.length / 2;
+        let L = Math.max(6, s * ((p.x - fx) * u.x + (-p.z - fy) * u.y));
+        const wall = e.altKey ? null : distToWall(fx, fy, s * u.x, s * u.y);
+        L = wall != null && Math.abs(L - wall) < 12 ? wall : Math.round(L / step) * step;
+        const x = fx + s * u.x * L / 2, y = fy + s * u.y * L / 2;
+        bdrag.at = { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, length: Math.round(L * 10) / 10 };
+        bdrag.mesh.scale.x = L / r.length;
+        bdrag.mesh.position.x = x;
+        bdrag.mesh.position.z = -y;
+        handles.forEach((h) => { const hs = h.userData.end as number; h.position.x = fx + (hs === s ? s * u.x * L : 0); h.position.z = -(fy + (hs === s ? s * u.y * L : 0)); });
+      }
+      if (bdrag.mode === 'move') {
+        const u = beamAxis(cb.angle);
+        handles.forEach((h) => { const hs = h.userData.end as number; h.position.x = bdrag!.at!.x + hs * u.x * r.length / 2; h.position.z = -(bdrag!.at!.y + hs * u.y * r.length / 2); });
+      }
+      return;
+    }
     if (odrag) {
       if (!odrag.moved && Math.hypot(e.clientX - odrag.sx, e.clientY - odrag.sy) < 4) return;
       ray.setFromCamera(ndc(e), camera);
@@ -780,6 +878,17 @@ function start() {
     drag.entry.group.position.z = Math.round((p.z + drag.dz) / step) * step;
   });
   addEventListener('pointerup', () => {
+    if (bdrag) {
+      const { id, moved, at } = bdrag;
+      bdrag = null;
+      rig.orbit.enabled = rig.mode !== 'walk';
+      const cb = cfg.beams!.find((x) => x.id === id);
+      if (!moved || !at || !cb) return;
+      cb.x = at.x; cb.y = at.y;
+      if (at.length != null) cb.length = at.length;
+      commitBuilding();
+      return;
+    }
     if (odrag) {
       const { id, moved, ghost, at } = odrag;
       odrag = null;
@@ -829,7 +938,7 @@ function start() {
   const hint = $('hint');
   function renderHint(m: Mode) {
     const body: Record<Mode, string> = {
-      orbit: '<b>Drag</b> rotate · <b>Right-drag</b> pan · <b>Scroll</b> zoom<ul><li>Click anything to inspect and edit it</li><li>Drag a selected fixture to move it (hold <b>Shift</b> for 6 in steps)</li><li>Drag a selected window or door along a wall (hold <b>Alt</b> to ignore walls)</li><li>Try <i>Walk</i> to stand inside</li></ul>',
+      orbit: '<b>Drag</b> rotate · <b>Right-drag</b> pan · <b>Scroll</b> zoom<ul><li>Click anything to inspect and edit it</li><li>Drag a selected fixture to move it (hold <b>Shift</b> for 6 in steps)</li><li>Drag a selected beam to move it, or its yellow end handles to resize it (ends snap to walls)</li><li>Drag a selected window or door along a wall (hold <b>Alt</b> to ignore walls)</li><li>Try <i>Walk</i> to stand inside</li></ul>',
       walk: '<b>W A S D</b> or <b>↑ ↓</b> move · <b>Drag</b> look around<ul><li><b>← →</b> turn · hold <b>Shift</b> to hurry</li><li>Pick <i>Orbit</i> to fly back out</li></ul>',
       plan: '<b>Drag</b> pan · <b>Scroll</b> zoom<ul><li>North is up</li><li>Click equipment for details</li></ul>',
     };
