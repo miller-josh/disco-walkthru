@@ -45,8 +45,9 @@ button[hidden] { display: none; }
 #info .form .actions { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 4px; }
 #info .form .danger { color: var(--accent); }
 #info .form .note { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
-#side h2 button { float: right; padding: 1px 8px; font-size: 12px; text-transform: none; letter-spacing: 0; }
-#items { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow: auto; }
+#side .tools { margin-bottom: 6px; }
+#side .tools button { padding: 3px 8px; font-size: 12px; }
+#items { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
 #items li { padding: 3px 6px; border-radius: 5px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }
 #items li:hover { background: #f4efe4; }
 #items li.sel { background: #ece6d4; font-weight: 600; }

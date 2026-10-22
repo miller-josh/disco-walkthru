@@ -7,7 +7,7 @@ All layout data lives in `data/` as plain files, so every change is a reviewable
 ## What is in the box
 
 - **Orbit** (default), **Walk** (66" eye height, collides with walls) and **Plan** (top-down, north up) views
-- **Editing:** select a fixture and drag it on the floor to move it (Shift snaps to 6 in). The panel edits label, category, size, elevation, position, rotation and notes. **+ Add** creates a fixture, **Duplicate** and **Delete** manage them. Click walls to set the ceiling/wall height, and click a window, door or soffit to set its sill/head or bottom height and give it a label.
+- **Editing:** select a fixture and drag it on the floor to move it (Shift snaps to 6 in). The panel edits label, category, size, elevation, position, rotation and notes. **+ Add** creates a fixture, **Duplicate** and **Delete** manage them. Click a wall to set its own height (walls are numbered Wall 1, Wall 2, ... in the Items list; blank follows the ceiling height). **Split wall** (click a start and an end point) makes a section of wall with its own height. **+ Opening** adds a door or window on the nearest wall. Drag a selected opening along a wall, or edit its type, sill, head, width, cut depth, position and angle. DXF openings can be edited, removed and restored. Soffits and openings can be labelled. The ceiling height is the "Ceiling" entry in the Items list.
 - Edits are saved in your browser. **Export JSON** downloads `fixtures.json` and `building.json` to replace the files in `data/`. **Reset** discards local edits.
 - Saved viewpoints from `data/views.json`
 - Click equipment for name, category, size, elevation, phase and notes
