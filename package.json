@@ -1,0 +1,23 @@
+{
+  "name": "disco-3d-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "sample-dxf": "node scripts/make-sample-dxf.mjs"
+  },
+  "dependencies": {
+    "dxf-parser": "^1.1.2",
+    "polygon-clipping": "^0.15.7",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}

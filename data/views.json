@@ -1,0 +1,6 @@
+[
+  { "id": "front-door", "name": "Front door", "mode": "walk", "eye": { "x": 280, "y": 24, "z": 66 }, "target": { "x": 280, "y": 200, "z": 60 } },
+  { "id": "dining-room", "name": "Dining room", "mode": "walk", "eye": { "x": 40, "y": 40, "z": 66 }, "target": { "x": 300, "y": 220, "z": 50 } },
+  { "id": "pizza-line", "name": "Pizza line", "mode": "walk", "eye": { "x": 440, "y": 40, "z": 66 }, "target": { "x": 640, "y": 200, "z": 40 } },
+  { "id": "drive-thru-window", "name": "Drive-thru window", "mode": "walk", "eye": { "x": 640, "y": 274, "z": 66 }, "target": { "x": 720, "y": 274, "z": 60 } }
+]

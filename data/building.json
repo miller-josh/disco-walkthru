@@ -1,0 +1,21 @@
+{
+  "units": "in",
+  "ceilingHeight": null,
+  "defaultWallThickness": 6,
+  "defaultDoorHeight": 80,
+  "layers": {
+    "walls": "WALLS",
+    "doors": "DOORS",
+    "windows": "WINDOWS",
+    "soffits": "SOFFITS",
+    "annotation": "ANNOTATION"
+  },
+  "openings": [
+    { "id": "storefront-1", "sill": null, "head": null },
+    { "id": "storefront-2", "sill": null, "head": null },
+    { "id": "drive-thru", "sill": null, "head": null }
+  ],
+  "soffits": [
+    { "id": "soffit-1", "height": null }
+  ]
+}
