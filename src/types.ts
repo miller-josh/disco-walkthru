@@ -31,7 +31,28 @@ export interface BuildingConfig {
   /** A stretch of wall (a to b, `width` across) with its own height. */
   wallSections?: { id: string; label?: string; a: Pt; b: Pt; width: number; height: number }[];
   /** Openings added in the viewer. Centre x/y, width along `angle`, depth through the wall. */
+  /** Ceiling beams and joists. Each is a box: centre x/y, `length` along `angle`, `width` across, `depth` tall. */
+  beams?: Beam[];
   customOpenings?: (Required<OpeningGeometry> & { id: string; kind: 'door' | 'window'; label?: string; sill: number; head: number })[];
+}
+
+export interface Beam {
+  id: string;
+  label?: string;
+  /** Centre in plan inches. */
+  x: number;
+  y: number;
+  /** Run of the beam, inches. null = TBD (drawn with a stand-in). */
+  length: number | null;
+  /** Across the beam, inches. */
+  width: number | null;
+  /** Vertical size of the beam, inches. */
+  depth: number | null;
+  /** Height of the underside above the floor. null = hangs flush under the ceiling (ceiling height minus depth). */
+  bottom?: number | null;
+  /** Degrees counter-clockwise from east: the direction `length` runs. 90 = north-south. */
+  angle: number;
+  notes?: string;
 }
 
 export interface OpeningGeometry {
@@ -89,7 +110,7 @@ export interface ViewDef {
 export interface OpenItem {
   /** Fixture id, opening id, etc. Used to focus the item when clicked. */
   id: string;
-  kind: 'fixture' | 'opening' | 'soffit' | 'building';
+  kind: 'fixture' | 'opening' | 'soffit' | 'beam' | 'building';
   label: string;
   missing: string[];
 }

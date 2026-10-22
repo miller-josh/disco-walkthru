@@ -6,7 +6,7 @@ import fixturesJson from '../data/fixtures.json';
 import viewsJson from '../data/views.json';
 import './style.css';
 import { parseDxf } from './dxf/parse';
-import { buildBuilding, DEFAULT_OPENING_DEPTH, openingFootprint, type BuildingItemRef } from './scene/building';
+import { buildBuilding, DEFAULT_BEAM, DEFAULT_OPENING_DEPTH, openingFootprint, type BuildingItemRef } from './scene/building';
 import { buildDraftEquipment } from './scene/draft';
 import { buildFixtures, CATEGORIES, CATEGORY_COLORS, setSelected, type FixtureEntry } from './scene/fixtures';
 import { Rig, type Mode } from './controls/rig';
@@ -52,6 +52,7 @@ function start() {
   cfg.walls ??= [];
   cfg.wallSections ??= [];
   cfg.customOpenings ??= [];
+  cfg.beams ??= [];
   let edited = false;
   try {
     const saved = JSON.parse(localStorage.getItem(STORE) ?? 'null');
@@ -63,6 +64,7 @@ function start() {
         cfg.walls = saved.building.walls ?? cfg.walls;
         cfg.wallSections = saved.building.wallSections ?? cfg.wallSections;
         cfg.customOpenings = saved.building.customOpenings ?? cfg.customOpenings;
+        cfg.beams = saved.building.beams ?? cfg.beams;
       }
       if (Array.isArray(saved.fixtures)) fixtures = saved.fixtures;
       edited = true;
@@ -140,12 +142,16 @@ function start() {
   $<HTMLInputElement>('t-draft').addEventListener('change', (e) => { draft.visible = (e.target as HTMLInputElement).checked; });
   $<HTMLInputElement>('t-ceiling').addEventListener('change', (e) => { building.ceiling.visible = (e.target as HTMLInputElement).checked; });
   const ceilingChk = $<HTMLInputElement>('t-ceiling');
+  const beamsChk = $<HTMLInputElement>('t-beams');
+  /** Beams hang over everything, so the top-down plan hides them. */
+  const applyBeams = () => { building.beamGroup.visible = beamsChk.checked && rig.mode !== 'plan'; };
+  beamsChk.addEventListener('change', applyBeams);
 
   // ---------- Edits: persistence and rebuilds ----------
   const save = () => {
     edited = true;
     try {
-      localStorage.setItem(STORE, JSON.stringify({ building: { ceilingHeight: cfg.ceilingHeight, openings: cfg.openings, soffits: cfg.soffits, walls: cfg.walls, wallSections: cfg.wallSections, customOpenings: cfg.customOpenings }, fixtures }));
+      localStorage.setItem(STORE, JSON.stringify({ building: { ceilingHeight: cfg.ceilingHeight, openings: cfg.openings, soffits: cfg.soffits, walls: cfg.walls, wallSections: cfg.wallSections, customOpenings: cfg.customOpenings, beams: cfg.beams }, fixtures }));
     } catch { toast('Could not save in this browser. Use Export JSON to keep your edits.'); }
     $('edited').hidden = false;
   };
@@ -156,6 +162,7 @@ function start() {
     disposeGroup(building.group);
     building = buildBuilding(cfg, dxf);
     building.ceiling.visible = ceilingChk.checked;
+    applyBeams();
     scene.add(building.group);
     rig.setCollision(building.collision);
     building.highlight(sel && sel.kind !== 'fixture' ? sel : null);
@@ -284,6 +291,27 @@ function start() {
       ].join('');
       return;
     }
+    if (sel.kind === 'beam') {
+      const e = cfg.beams!.find((x) => x.id === sel!.id);
+      const r = building.beams.find((x) => x.id === sel!.id);
+      if (!e || !r) return;
+      $('info-name').textContent = e.label || `Beam "${e.id}"`;
+      const stand = (v: number) => `${trim(v)} (stand-in)`;
+      body.innerHTML = [
+        row('Label', textIn('label', e.label ?? '')),
+        row('Length in', numIn('blength', e.length, stand(r.length))),
+        row('Width in', numIn('bwidth', e.width, stand(r.width))),
+        row('Depth in', numIn('bdepth', e.depth, stand(r.depth))),
+        row('Bottom in', numIn('bbottom', e.bottom, `${trim(r.bottom)} (flush to ceiling)`)),
+        row('Center X', numIn('bx', e.x)),
+        row('Center Y', numIn('by', e.y)),
+        row('Angle °', numIn('bangle', e.angle)),
+        `<label class="full">Notes</label><textarea class="full" data-f="bnotes">${escapeHtml(e.notes ?? '')}</textarea>`,
+        `<div class="note">Length runs along Angle (0 = east-west, 90 = north-south). Width is across the beam, depth is how tall it is. Bottom is the underside above the floor; blank hangs the beam flush under the ceiling. Top is ${trim(r.top)} in.</div>`,
+        `<div class="actions"><button data-act="dup-beam">Duplicate</button><button data-act="del-beam" class="danger">Delete</button></div>`,
+      ].join('');
+      return;
+    }
     const sf = building.soffits.find((x) => x.id === sel!.id);
     const se = cfg.soffits.find((x) => x.id === sel!.id);
     $('info-name').textContent = se?.label || `Soffit "${sel.id}"`;
@@ -357,6 +385,18 @@ function start() {
         else if (f === 'bx') e.b.x = n;
         else if (f === 'by') e.b.y = n;
       }
+    } else if (sel.kind === 'beam') {
+      const e = cfg.beams!.find((x) => x.id === sel!.id);
+      if (!e) return;
+      if (f === 'label') { e.label = label(); if (e.label === undefined) delete e.label; }
+      else if (f === 'bnotes') { if (v.trim()) e.notes = v; else delete e.notes; }
+      else if (f === 'blength' || f === 'bwidth' || f === 'bdepth') e[{ blength: 'length', bwidth: 'width', bdepth: 'depth' }[f] as 'length'] = n != null && n > 0 ? n : null;
+      else if (f === 'bbottom') e.bottom = n != null && n >= 0 ? n : null;
+      else if (n != null) {
+        if (f === 'bx') e.x = n;
+        else if (f === 'by') e.y = n;
+        else if (f === 'bangle') e.angle = n;
+      }
     } else if (sel.kind === 'opening') {
       const custom = cfg.customOpenings!.find((x) => x.id === sel!.id);
       const e = openingEntry(sel.id);
@@ -418,6 +458,20 @@ function start() {
         toast('Opening removed. Pick it in the Items list to restore it.');
         sel = { kind: 'opening', id: ref.id };
       }
+    } else if (act === 'del-beam') {
+      if (!confirm('Delete this beam?')) return;
+      cfg.beams = cfg.beams!.filter((x) => x.id !== ref.id);
+      sel = null;
+    } else if (act === 'dup-beam') {
+      const b = cfg.beams!.find((x) => x.id === ref.id);
+      if (!b) return;
+      const id = nextId('beam', cfg.beams!);
+      // Cross beams repeat across the room: step the copy sideways, 24 in on centre.
+      const a = (b.angle * Math.PI) / 180;
+      const copy = { ...structuredClone(b), id, x: Math.round(b.x - Math.sin(a) * 24), y: Math.round(b.y + Math.cos(a) * 24) };
+      delete copy.label;
+      cfg.beams!.push(copy);
+      sel = { kind: 'beam', id };
     } else if (act === 'restore') {
       const e = cfg.openings.find((x) => x.id === ref.id);
       if (e) delete e.deleted;
@@ -497,6 +551,14 @@ function start() {
     commitBuilding();
     toast(snap ? 'Opening added on the nearest wall. Drag it along the wall, or change its type to window.' : 'Opening added, but no wall was close. Drag it onto a wall.');
   });
+  $('add-beam').addEventListener('click', () => {
+    const c = floorPointAtCentre();
+    const id = nextId('beam', cfg.beams!);
+    cfg.beams!.push({ id, x: Math.round(c.x), y: Math.round(c.y), length: DEFAULT_BEAM.length, width: DEFAULT_BEAM.width, depth: DEFAULT_BEAM.depth, bottom: null, angle: 0 });
+    sel = { kind: 'beam', id };
+    commitBuilding();
+    toast('Beam added under the ceiling. Set its size, position and angle in the panel.');
+  });
   let splitStart: Pt | null | 'armed' = null;
   $('split-wall').addEventListener('click', () => {
     measure.setActive(false);
@@ -537,6 +599,9 @@ function start() {
     } else if (ref.kind === 'soffit') {
       const o = building.soffits.find((x) => x.id === ref.id);
       if (o) rig.focusPoint({ x: o.center.x, y: o.center.y, z: o.height });
+    } else if (ref.kind === 'beam') {
+      const o = building.beams.find((x) => x.id === ref.id);
+      if (o) rig.focusPoint({ x: o.center.x, y: o.center.y, z: o.bottom });
     } else if (ref.kind === 'wall') {
       const o = building.walls.find((x) => x.id === ref.id);
       if (o) rig.focusPoint({ x: o.center.x, y: o.center.y, z: o.height / 2 });
@@ -551,6 +616,7 @@ function start() {
     if (ref.kind === 'wall') return cfg.walls!.find((e) => e.id === ref.id)?.label || ref.id.replace('wall-', 'Wall ');
     if (ref.kind === 'section') return cfg.wallSections!.find((e) => e.id === ref.id)?.label || `Wall section ${ref.id.replace('section-', '')}`;
     if (ref.kind === 'opening') return [...cfg.openings, ...cfg.customOpenings!].find((e) => e.id === ref.id)?.label || ref.id;
+    if (ref.kind === 'beam') return cfg.beams!.find((e) => e.id === ref.id)?.label || ref.id;
     return cfg.soffits.find((e) => e.id === ref.id)?.label || ref.id;
   }
   function renderItems() {
@@ -571,6 +637,7 @@ function start() {
     for (const o of building.openings) add({ kind: 'opening', id: o.id }, o.kind);
     for (const id of building.removedOpenings) add({ kind: 'opening', id }, 'removed', ' (removed)');
     for (const o of building.soffits) add({ kind: 'soffit', id: o.id }, 'soffit');
+    for (const o of building.beams) add({ kind: 'beam', id: o.id }, `beam · ${trim(o.bottom)} in`);
   }
 
   // ---------- Open items ----------
@@ -740,6 +807,7 @@ function start() {
   rig.onModeChange = (m: Mode) => {
     modeBtns.forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
     canvas.style.cursor = measure.active ? 'crosshair' : m === 'walk' ? 'grab' : '';
+    applyBeams();
     renderHint(m);
   };
   modeBtns.forEach((b) =>
