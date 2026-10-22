@@ -6,14 +6,30 @@ import fixturesJson from '../data/fixtures.json';
 import viewsJson from '../data/views.json';
 import './style.css';
 import { parseDxf } from './dxf/parse';
-import { buildBuilding } from './scene/building';
+import { buildBuilding, DEFAULT_OPENING_DEPTH, openingFootprint, type BuildingItemRef } from './scene/building';
 import { buildDraftEquipment } from './scene/draft';
 import { buildFixtures, CATEGORIES, CATEGORY_COLORS, setSelected, type FixtureEntry } from './scene/fixtures';
 import { Rig, type Mode } from './controls/rig';
 import { MeasureTool } from './ui/measure';
 import { decodePose, encodePose } from './ui/hash';
-import { dims, trim } from './format';
-import type { BuildingConfig, Category, Fixture, OpenItem, ViewDef } from './types';
+import { trim } from './format';
+import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import type { BuildingConfig, Category, Fixture, OpenItem, Pt, ViewDef } from './types';
+
+const STORE = 'disco-layout-edits-v1';
+
+type Sel = { kind: 'fixture'; id: string } | BuildingItemRef | null;
+
+const num = (v: string): number | null => (v.trim() === '' || Number.isNaN(Number(v)) ? null : Number(v));
+const attr = (s: string) => escapeHtml(s);
+
+/** Removes label elements and frees geometry before a group is dropped and rebuilt. */
+function disposeGroup(g: THREE.Object3D) {
+  g.traverse((o) => {
+    if (o instanceof CSS2DObject) o.element.remove();
+    if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) o.geometry.dispose();
+  });
+}
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -31,14 +47,33 @@ try {
 }
 
 function start() {
-  const cfg = buildingJson as unknown as BuildingConfig;
-  const fixtures = fixturesJson as unknown as Fixture[];
+  const cfg = structuredClone(buildingJson) as unknown as BuildingConfig;
+  let fixtures = structuredClone(fixturesJson) as unknown as Fixture[];
+  cfg.walls ??= [];
+  cfg.wallSections ??= [];
+  cfg.customOpenings ??= [];
+  let edited = false;
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORE) ?? 'null');
+    if (saved) {
+      if (saved.building) {
+        cfg.ceilingHeight = saved.building.ceilingHeight ?? null;
+        cfg.openings = saved.building.openings ?? cfg.openings;
+        cfg.soffits = saved.building.soffits ?? cfg.soffits;
+        cfg.walls = saved.building.walls ?? cfg.walls;
+        cfg.wallSections = saved.building.wallSections ?? cfg.wallSections;
+        cfg.customOpenings = saved.building.customOpenings ?? cfg.customOpenings;
+      }
+      if (Array.isArray(saved.fixtures)) fixtures = saved.fixtures;
+      edited = true;
+    }
+  } catch { /* corrupt or blocked storage: start from the files */ }
   const views = viewsJson as unknown as ViewDef[];
 
   // ---------- Data -> scene ----------
   const dxf = parseDxf(baseDxf, cfg);
-  const building = buildBuilding(cfg, dxf);
-  const fx = buildFixtures(fixtures, building.bounds);
+  let building = buildBuilding(cfg, dxf);
+  let fx = buildFixtures(fixtures, building.bounds);
   for (const w of building.warnings) console.warn(w);
 
   const scene = new THREE.Scene();
@@ -72,7 +107,7 @@ function start() {
   const catOn = new Set<Category>(CATEGORIES);
   let futureOn = true;
   let labelsOn = true;
-  const present = new Set(fx.entries.map((e) => e.group.userData.category as Category));
+  const present = new Set<Category>();
   const applyVisibility = () => {
     for (const e of fx.entries) {
       const cat = e.group.userData.category as Category;
@@ -83,11 +118,15 @@ function start() {
     }
   };
   const catBox = $('cats');
+  function renderCats() {
+    catBox.innerHTML = '';
+    present.clear();
+    for (const e of fx.entries) present.add(e.group.userData.category as Category);
   for (const cat of CATEGORIES) {
     if (!present.has(cat)) continue;
     const row = document.createElement('label');
     row.className = 'row';
-    row.innerHTML = `<input type="checkbox" checked><span class="swatch" style="background:#${CATEGORY_COLORS[cat].toString(16).padStart(6, '0')}"></span>${cat}`;
+    row.innerHTML = `<input type="checkbox" ${catOn.has(cat) ? 'checked' : ''}><span class="swatch" style="background:#${CATEGORY_COLORS[cat].toString(16).padStart(6, '0')}"></span>${cat}`;
     row.querySelector('input')!.addEventListener('change', (ev) => {
       if ((ev.target as HTMLInputElement).checked) catOn.add(cat);
       else catOn.delete(cat);
@@ -95,54 +134,463 @@ function start() {
     });
     catBox.append(row);
   }
+  }
   $<HTMLInputElement>('t-future').addEventListener('change', (e) => { futureOn = (e.target as HTMLInputElement).checked; applyVisibility(); });
   $<HTMLInputElement>('t-labels').addEventListener('change', (e) => { labelsOn = (e.target as HTMLInputElement).checked; applyVisibility(); });
   $<HTMLInputElement>('t-draft').addEventListener('change', (e) => { draft.visible = (e.target as HTMLInputElement).checked; });
   $<HTMLInputElement>('t-ceiling').addEventListener('change', (e) => { building.ceiling.visible = (e.target as HTMLInputElement).checked; });
+  const ceilingChk = $<HTMLInputElement>('t-ceiling');
 
-  // ---------- Selection panel ----------
-  let selected: FixtureEntry | null = null;
-  function select(entry: FixtureEntry | null) {
-    if (selected) setSelected(selected, false);
-    selected = entry;
-    const panel = $('info');
-    panel.hidden = !entry;
-    if (!entry) return;
-    setSelected(entry, true);
-    const f = entry.data;
-    const tbd = (v: number | null | undefined, unit = ' in') => (v == null ? `<span class="tbd">TBD</span>` : trim(v) + unit);
-    $('info-name').textContent = f.name;
-    const rows: [string, string][] = [
-      ['Category', f.category],
-      ['Phase', f.phase ?? 'opening'],
-      ['W × D × H', f.width == null || f.depth == null || f.height == null ? `${dims(f.width, f.depth, f.height)} <span class="tbd">(showing a stand-in size)</span>` : dims(f.width, f.depth, f.height)],
-      ['Elevation', tbd(f.elevation === undefined ? 0 : f.elevation)],
-      ['Position', f.x == null || f.y == null ? `<span class="tbd">TBD</span>` : `${trim(f.x)}, ${trim(f.y)} in`],
-      ['Rotation', `${f.rotation ?? 0}° clockwise from north`],
-    ];
-    if (f.notes) rows.push(['Notes', escapeHtml(f.notes)]);
-    $('info-body').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  // ---------- Edits: persistence and rebuilds ----------
+  const save = () => {
+    edited = true;
+    try {
+      localStorage.setItem(STORE, JSON.stringify({ building: { ceilingHeight: cfg.ceilingHeight, openings: cfg.openings, soffits: cfg.soffits, walls: cfg.walls, wallSections: cfg.wallSections, customOpenings: cfg.customOpenings }, fixtures }));
+    } catch { toast('Could not save in this browser. Use Export JSON to keep your edits.'); }
+    $('edited').hidden = false;
+  };
+  $('edited').hidden = !edited;
+
+  function rebuildBuilding() {
+    scene.remove(building.group);
+    disposeGroup(building.group);
+    building = buildBuilding(cfg, dxf);
+    building.ceiling.visible = ceilingChk.checked;
+    scene.add(building.group);
+    rig.setCollision(building.collision);
+    building.highlight(sel && sel.kind !== 'fixture' ? sel : null);
   }
+  function rebuildFixtures() {
+    scene.remove(fx.group);
+    disposeGroup(fx.group);
+    fx = buildFixtures(fixtures, building.bounds);
+    scene.add(fx.group);
+    applyVisibility();
+  }
+  function refreshAll() {
+    renderCats();
+    renderItems();
+    renderOpenItems();
+    renderPanel();
+  }
+
+  // ---------- Selection ----------
+  let sel: Sel = null;
+  let selected: FixtureEntry | null = null;
+  function select(next: Sel, keepForm = false) {
+    if (selected) setSelected(selected, false);
+    sel = next;
+    selected = next?.kind === 'fixture' ? fx.entries.find((e) => e.data.id === next.id) ?? null : null;
+    if (next?.kind === 'fixture' && !selected) sel = null;
+    if (selected) setSelected(selected, true);
+    building.highlight(next && next.kind !== 'fixture' ? next : null);
+    if (keepForm) {
+      if (selected) $('info-name').textContent = selected.data.name;
+    } else renderPanel();
+    renderItems();
+  }
+
+  const row = (label: string, control: string) => `<label>${label}</label>${control}`;
+  const numIn = (f: string, v: number | null | undefined, ph = '') =>
+    `<input type="number" step="any" data-f="${f}" value="${v == null ? '' : trim(v)}" placeholder="${ph || 'TBD'}">`;
+  const textIn = (f: string, v: string) => `<input type="text" data-f="${f}" value="${attr(v)}">`;
+
+  function renderPanel() {
+    const panel = $('info');
+    panel.hidden = !sel;
+    if (!sel) return;
+    const body = $('info-body');
+    if (sel.kind === 'fixture') {
+      const f = selected!.data;
+      $('info-name').textContent = f.name;
+      const opts = (list: string[], cur: string) => list.map((o) => `<option ${o === cur ? 'selected' : ''}>${o}</option>`).join('');
+      body.innerHTML = [
+        row('Label', textIn('name', f.name)),
+        row('Category', `<select data-f="category">${opts(CATEGORIES, f.category)}</select>`),
+        row('Phase', `<select data-f="phase">${opts(['opening', 'future'], f.phase ?? 'opening')}</select>`),
+        row('Width in', numIn('width', f.width)),
+        row('Depth in', numIn('depth', f.depth)),
+        row('Height in', numIn('height', f.height)),
+        row('Elevation', numIn('elevation', f.elevation === undefined ? 0 : f.elevation)),
+        row('X (east)', numIn('x', f.x)),
+        row('Y (north)', numIn('y', f.y)),
+        row('Rotation °', numIn('rotation', f.rotation ?? 0, '0')),
+        `<label class="full">Notes</label><textarea class="full" data-f="notes">${escapeHtml(f.notes ?? '')}</textarea>`,
+        `<div class="note">Blank means TBD (shown with a stand-in size). Select, then drag the box on the floor to move it. Rotation is clockwise from north.</div>`,
+        `<div class="actions"><button data-act="dup">Duplicate</button><button data-act="del" class="danger">Delete</button></div>`,
+      ].join('');
+      return;
+    }
+    if (sel.kind === 'ceiling') {
+      $('info-name').textContent = 'Ceiling';
+      body.innerHTML = [
+        row('Height in', numIn('ceiling', cfg.ceilingHeight, `${building.ceilingHeight} (stand-in)`)),
+        `<div class="note">Finished ceiling height. Walls without their own height rise to it and soffits hang from it.</div>`,
+      ].join('');
+      return;
+    }
+    if (sel.kind === 'wall') {
+      const w = building.walls.find((x) => x.id === sel!.id);
+      const e = cfg.walls!.find((x) => x.id === sel!.id);
+      $('info-name').textContent = e?.label || w?.id.replace('wall-', 'Wall ') || 'Wall';
+      body.innerHTML = [
+        row('Label', textIn('label', e?.label ?? '')),
+        row('Height in', numIn('wallHeight', e?.height, `${trim(building.ceilingHeight)} (ceiling)`)),
+        `<div class="note">Blank follows the ceiling height. To change just part of a wall, use <b>Split wall</b> and click where the section starts and ends.</div>`,
+      ].join('');
+      return;
+    }
+    if (sel.kind === 'section') {
+      const e = cfg.wallSections!.find((x) => x.id === sel!.id);
+      if (!e) return;
+      $('info-name').textContent = e.label || `Wall section ${e.id.replace('section-', '')}`;
+      body.innerHTML = [
+        row('Label', textIn('label', e.label ?? '')),
+        row('Height in', numIn('sectionHeight', e.height)),
+        row('Start X', numIn('ax', e.a.x)),
+        row('Start Y', numIn('ay', e.a.y)),
+        row('End X', numIn('bx', e.b.x)),
+        row('End Y', numIn('by', e.b.y)),
+        row('Cover in', numIn('sectionWidth', e.width)),
+        `<div class="note">The section sets the height of any wall between its start and end points, as wide as "Cover" (centred on the line). Earlier sections win where they overlap.</div>`,
+        `<div class="actions"><button data-act="del-section" class="danger">Delete section</button></div>`,
+      ].join('');
+      return;
+    }
+    if (sel.kind === 'opening') {
+      const o = building.openings.find((x) => x.id === sel!.id);
+      if (!o) {
+        $('info-name').textContent = `Removed opening "${sel.id}"`;
+        body.innerHTML = `<div class="note">This opening was removed. The wall is solid here.</div><div class="actions"><button data-act="restore">Restore</button></div>`;
+        return;
+      }
+      const e = [...cfg.openings, ...cfg.customOpenings!].find((x) => x.id === sel!.id);
+      $('info-name').textContent = o.label || `${o.kind === 'door' ? 'Door' : 'Window'} "${o.id}"`;
+      const stand = (v: number) => `${trim(v)} (stand-in)`;
+      body.innerHTML = [
+        row('Label', textIn('label', o.label ?? '')),
+        row('Type', o.custom
+          ? `<select data-f="kind">${['door', 'window'].map((k) => `<option value="${k}" ${k === o.kind ? 'selected' : ''}>${k === 'door' ? 'door / doorway' : 'window'}</option>`).join('')}</select>`
+          : `<input type="text" value="${o.kind === 'door' ? 'door / doorway' : 'window'}" disabled>`),
+        row('Sill in', numIn('sill', e?.sill, stand(o.sill))),
+        row('Head in', numIn('head', e?.head, stand(o.head))),
+        row('Width in', numIn('width', o.width)),
+        row('Cut depth', numIn('depth', o.depth)),
+        row('Center X', numIn('cx', o.center.x)),
+        row('Center Y', numIn('cy', o.center.y)),
+        row('Angle °', numIn('angle', o.angle)),
+        `<div class="note">Sill is the bottom of the opening, head the top, both from the floor. Width runs along Angle (0 = east-west, 90 = north-south). Cut depth is how far the opening cuts through the wall. Select it and drag to move; it snaps to the nearest wall.</div>`,
+        `<div class="actions">${o.custom ? '<button data-act="dup-opening">Duplicate</button>' : ''}<button data-act="del-opening" class="danger">${o.custom ? 'Delete' : 'Remove'}</button></div>`,
+      ].join('');
+      return;
+    }
+    const sf = building.soffits.find((x) => x.id === sel!.id);
+    const se = cfg.soffits.find((x) => x.id === sel!.id);
+    $('info-name').textContent = se?.label || `Soffit "${sel.id}"`;
+    body.innerHTML = [
+      row('Label', textIn('label', se?.label ?? '')),
+      row('Bottom in', numIn('height', se?.height, sf ? `${trim(sf.height)} (stand-in)` : '')),
+      `<div class="note">Height of the soffit's underside from the floor.</div>`,
+    ].join('');
+  }
+
+  /** keepForm leaves the open form alone so a click into the next field is not lost to a re-render. */
+  function commitFixtures(keepForm = false) {
+    save();
+    rebuildFixtures();
+    select(sel, keepForm);
+    renderCats();
+    renderOpenItems();
+    if (!keepForm) renderPanel();
+  }
+  function commitBuilding(keepForm = false) {
+    save();
+    rebuildBuilding();
+    if (sel && sel.kind !== 'fixture') {
+      const t = $('info-name');
+      if (keepForm) t.textContent = itemName(sel);
+    }
+    renderItems();
+    renderOpenItems();
+    if (!keepForm) renderPanel();
+  }
+
+  $('info-body').addEventListener('change', (ev) => {
+    const t = ev.target as HTMLInputElement;
+    const f = t.dataset.f;
+    if (!f || !sel) return;
+    const v = t.value;
+    if (sel.kind === 'fixture') {
+      const d = selected!.data;
+      const n = num(v);
+      switch (f) {
+        case 'name': d.name = v.trim() || d.name; break;
+        case 'category': d.category = v as Category; break;
+        case 'phase': d.phase = v === 'future' ? 'future' : 'opening'; break;
+        case 'width': case 'depth': case 'height': d[f] = n != null && n > 0 ? n : null; break;
+        case 'elevation': case 'x': case 'y': d[f] = n; break;
+        case 'rotation': d.rotation = n ?? 0; break;
+        case 'notes': if (v.trim()) d.notes = v; else delete d.notes; break;
+      }
+      commitFixtures(true);
+      return;
+    }
+    const n = num(v);
+    const label = () => (v.trim() ? v.trim() : undefined);
+    if (sel.kind === 'ceiling') {
+      cfg.ceilingHeight = n != null && n >= 12 ? n : null;
+    } else if (sel.kind === 'wall') {
+      let e = cfg.walls!.find((x) => x.id === sel!.id);
+      if (!e) cfg.walls!.push((e = { id: sel.id, height: null }));
+      if (f === 'label') e.label = label();
+      else e.height = n != null && n >= 0 ? n : null;
+      if (e.label === undefined) delete e.label;
+    } else if (sel.kind === 'section') {
+      const e = cfg.wallSections!.find((x) => x.id === sel!.id);
+      if (!e) return;
+      if (f === 'label') { e.label = label(); if (e.label === undefined) delete e.label; }
+      else if (n != null) {
+        if (f === 'sectionHeight') e.height = Math.max(0, n);
+        else if (f === 'sectionWidth') e.width = Math.max(1, n);
+        else if (f === 'ax') e.a.x = n;
+        else if (f === 'ay') e.a.y = n;
+        else if (f === 'bx') e.b.x = n;
+        else if (f === 'by') e.b.y = n;
+      }
+    } else if (sel.kind === 'opening') {
+      const custom = cfg.customOpenings!.find((x) => x.id === sel!.id);
+      const e = openingEntry(sel.id);
+      if (f === 'label') { if (label()) e.label = label(); else delete e.label; }
+      else if (f === 'kind' && custom) custom.kind = v === 'window' ? 'window' : 'door';
+      else if (f === 'sill' || f === 'head') e[f] = custom ? n ?? e[f] : n;
+      else if (n != null) {
+        if (f === 'width' || f === 'depth') e[f] = Math.max(1, n);
+        else if (f === 'cx') e.x = n;
+        else if (f === 'cy') e.y = n;
+        else if (f === 'angle') e.angle = n;
+      }
+    } else {
+      let e = cfg.soffits.find((x) => x.id === sel!.id);
+      if (!e) cfg.soffits.push((e = { id: sel.id, height: null }));
+      if (f === 'label') { e.label = label(); if (e.label === undefined) delete e.label; }
+      else if (f === 'height') e.height = n;
+    }
+    commitBuilding(true);
+  });
+
+  $('info-body').addEventListener('click', (ev) => {
+    const act = (ev.target as HTMLElement).dataset.act;
+    if (act && sel && sel.kind !== 'fixture') {
+      buildingAction(act, sel);
+      return;
+    }
+    if (!act || !selected) return;
+    const d = selected.data;
+    if (act === 'del') {
+      if (!confirm(`Delete "${d.name}"?`)) return;
+      fixtures = fixtures.filter((x) => x !== d);
+      sel = null;
+      commitFixtures();
+    } else if (act === 'dup') {
+      let id = `${d.id}-copy`;
+      for (let i = 2; fixtures.some((x) => x.id === id); i++) id = `${d.id}-copy${i}`;
+      const copy: Fixture = { ...structuredClone(d), id, name: `${d.name} copy` };
+      if (copy.x != null && copy.y != null) { copy.x += 12; copy.y -= 12; }
+      fixtures.push(copy);
+      sel = { kind: 'fixture', id };
+      commitFixtures();
+    }
+  });
+  function buildingAction(act: string, ref: BuildingItemRef) {
+    if (act === 'del-section') {
+      cfg.wallSections = cfg.wallSections!.filter((x) => x.id !== ref.id);
+      sel = null;
+    } else if (act === 'del-opening') {
+      const custom = cfg.customOpenings!.some((x) => x.id === ref.id);
+      if (custom) {
+        if (!confirm('Delete this opening?')) return;
+        cfg.customOpenings = cfg.customOpenings!.filter((x) => x.id !== ref.id);
+        sel = null;
+      } else {
+        let e = cfg.openings.find((x) => x.id === ref.id);
+        if (!e) cfg.openings.push((e = { id: ref.id, sill: null, head: null }));
+        e.deleted = true;
+        toast('Opening removed. Pick it in the Items list to restore it.');
+        sel = { kind: 'opening', id: ref.id };
+      }
+    } else if (act === 'restore') {
+      const e = cfg.openings.find((x) => x.id === ref.id);
+      if (e) delete e.deleted;
+    } else if (act === 'dup-opening') {
+      const o = cfg.customOpenings!.find((x) => x.id === ref.id);
+      if (!o) return;
+      const id = nextId('opening', cfg.customOpenings!);
+      cfg.customOpenings!.push({ ...o, id, x: o.x + 24, y: o.y - 24 });
+      sel = { kind: 'opening', id };
+    } else return;
+    commitBuilding();
+  }
+  /** The settings object for an opening: the custom one, or the override for a DXF one (created on demand). */
+  function openingEntry(id: string): Record<string, any> { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const custom = cfg.customOpenings!.find((x) => x.id === id);
+    if (custom) return custom;
+    let e = cfg.openings.find((x) => x.id === id);
+    if (!e) cfg.openings.push((e = { id, sill: null, head: null }));
+    return e;
+  }
+  const nextId = (prefix: string, list: { id: string }[]) => {
+    let n = 1;
+    while (list.some((x) => x.id === `${prefix}-${n}`)) n++;
+    return `${prefix}-${n}`;
+  };
   $('info-close').addEventListener('click', () => select(null));
 
-  // ---------- Open items ----------
-  const openItems: OpenItem[] = [...building.openItems, ...fx.openItems];
-  $('open-count').textContent = String(openItems.length);
-  $('open-count').hidden = openItems.length === 0;
-  const list = $('open-items');
-  if (!openItems.length) list.innerHTML = '<li>Nothing left to measure.</li>';
-  for (const it of openItems) {
-    const li = document.createElement('li');
-    li.innerHTML = `${escapeHtml(it.label)}<small>needs ${it.missing.join(', ')}</small>`;
-    li.addEventListener('click', () => {
-      const entry = fx.entries.find((e) => e.data.id === it.id);
-      if (it.kind === 'fixture' && entry) {
-        if (!entry.group.visible) toast('That item is hidden by the filters.');
-        select(entry);
-        rig.focusPoint({ x: entry.group.position.x, y: -entry.group.position.z, z: entry.elevation + entry.size.h / 2 });
-      }
+  addEventListener('keydown', (e) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selected && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+      e.preventDefault();
+      $('info-body').querySelector<HTMLButtonElement>('[data-act="del"]')?.click();
+    }
+  });
+
+  // ---------- Add / export / reset ----------
+  $('add-item').addEventListener('click', () => {
+    const { x, y } = floorPointAtCentre();
+    let n = 1;
+    while (fixtures.some((f) => f.id === `item-${n}`)) n++;
+    fixtures.push({ id: `item-${n}`, name: 'New item', category: 'other', width: 24, depth: 24, height: 36, elevation: 0, x: Math.round(x), y: Math.round(y), rotation: 0, phase: 'opening' });
+    sel = { kind: 'fixture', id: `item-${n}` };
+    commitFixtures();
+    toast('Added. Rename it in the panel, then drag it into place.');
+  });
+
+  /** Nearest wall face within reach of (x, y): where to put an opening and which way it runs. */
+  function snapToWall(x: number, y: number, reach = 30): { x: number; y: number; angle: number } | null {
+    let best: { d: number; x: number; y: number; angle: number } | null = null;
+    for (const [x1, y1, x2, y2] of building.wallEdges) {
+      const dx = x2 - x1, dy = y2 - y1;
+      const len2 = dx * dx + dy * dy;
+      if (!len2) continue;
+      const t = Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / len2));
+      const px = x1 + t * dx, py = y1 + t * dy;
+      const d = Math.hypot(x - px, y - py);
+      if (d <= reach && (!best || d < best.d)) best = { d, x: px, y: py, angle: ((Math.atan2(dy, dx) * 180) / Math.PI + 180) % 180 };
+    }
+    return best && { x: Math.round(best.x), y: Math.round(best.y), angle: Math.round(best.angle * 10) / 10 };
+  }
+  const floorPointAtCentre = () => {
+    ray.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const p = new THREE.Vector3();
+    const b = building.bounds;
+    if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), p)) return { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
+    return { x: Math.max(b.minX, Math.min(b.maxX, p.x)), y: Math.max(b.minY, Math.min(b.maxY, -p.z)) };
+  };
+  $('add-opening').addEventListener('click', () => {
+    const c = floorPointAtCentre();
+    const snap = snapToWall(c.x, c.y, 120);
+    const id = nextId('opening', cfg.customOpenings!);
+    cfg.customOpenings!.push({
+      id, kind: 'door', x: snap?.x ?? Math.round(c.x), y: snap?.y ?? Math.round(c.y), width: 36, depth: cfg.openingDepth ?? DEFAULT_OPENING_DEPTH,
+      angle: snap?.angle ?? 0, sill: 0, head: cfg.defaultDoorHeight,
     });
-    list.append(li);
+    sel = { kind: 'opening', id };
+    commitBuilding();
+    toast(snap ? 'Opening added on the nearest wall. Drag it along the wall, or change its type to window.' : 'Opening added, but no wall was close. Drag it onto a wall.');
+  });
+  let splitStart: Pt | null | 'armed' = null;
+  $('split-wall').addEventListener('click', () => {
+    measure.setActive(false);
+    splitStart = splitStart ? null : 'armed';
+    $('split-wall').classList.toggle('on', !!splitStart);
+    if (splitStart) toast('Click where the wall section starts, then where it ends.');
+  });
+
+  function download(name: string, data: unknown) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'], { type: 'application/json' }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  $('export').addEventListener('click', () => {
+    download('fixtures.json', fixtures);
+    download('building.json', cfg);
+    toast('Downloaded fixtures.json and building.json. Replace the files in data/.');
+  });
+  $('reset').addEventListener('click', () => {
+    if (!confirm('Discard all local edits and go back to the files in data/?')) return;
+    try { localStorage.removeItem(STORE); } catch { /* ignore */ }
+    location.reload();
+  });
+
+  // ---------- Items list ----------
+  function focusItem(ref: Sel) {
+    if (!ref) return;
+    if (ref.kind === 'fixture') {
+      const entry = fx.entries.find((e) => e.data.id === ref.id);
+      if (!entry) return;
+      if (!entry.group.visible) toast('That item is hidden by the filters.');
+      rig.focusPoint({ x: entry.group.position.x, y: -entry.group.position.z, z: entry.elevation + entry.size.h / 2 });
+    } else if (ref.kind === 'opening') {
+      const o = building.openings.find((x) => x.id === ref.id);
+      if (o) rig.focusPoint({ x: o.center.x, y: o.center.y, z: (o.sill + o.head) / 2 });
+    } else if (ref.kind === 'soffit') {
+      const o = building.soffits.find((x) => x.id === ref.id);
+      if (o) rig.focusPoint({ x: o.center.x, y: o.center.y, z: o.height });
+    } else if (ref.kind === 'wall') {
+      const o = building.walls.find((x) => x.id === ref.id);
+      if (o) rig.focusPoint({ x: o.center.x, y: o.center.y, z: o.height / 2 });
+    } else if (ref.kind === 'section') {
+      const o = building.sections.find((x) => x.id === ref.id);
+      if (o) rig.focusPoint({ x: o.center.x, y: o.center.y, z: o.height / 2 });
+    }
+  }
+  function itemName(ref: NonNullable<Sel>): string {
+    if (ref.kind === 'fixture') return fixtures.find((f) => f.id === ref.id)?.name ?? ref.id;
+    if (ref.kind === 'ceiling') return 'Ceiling';
+    if (ref.kind === 'wall') return cfg.walls!.find((e) => e.id === ref.id)?.label || ref.id.replace('wall-', 'Wall ');
+    if (ref.kind === 'section') return cfg.wallSections!.find((e) => e.id === ref.id)?.label || `Wall section ${ref.id.replace('section-', '')}`;
+    if (ref.kind === 'opening') return [...cfg.openings, ...cfg.customOpenings!].find((e) => e.id === ref.id)?.label || ref.id;
+    return cfg.soffits.find((e) => e.id === ref.id)?.label || ref.id;
+  }
+  function renderItems() {
+    const ul = $('items');
+    ul.innerHTML = '';
+    const add = (ref: NonNullable<Sel>, kind: string, extra = '') => {
+      const li = document.createElement('li');
+      const on = sel && sel.kind === ref.kind && sel.id === ref.id;
+      li.className = on ? 'sel' : '';
+      li.innerHTML = `<span>${escapeHtml(itemName(ref) + extra)}</span><small>${kind}</small>`;
+      li.addEventListener('click', () => { select(ref); focusItem(ref); });
+      ul.append(li);
+    };
+    add({ kind: 'ceiling', id: 'ceiling' }, 'building');
+    for (const w of building.walls) add({ kind: 'wall', id: w.id }, `wall · ${trim(w.height)} in`);
+    for (const x of building.sections) add({ kind: 'section', id: x.id }, `section · ${trim(x.height)} in`);
+    for (const f of [...fixtures].sort((a, b) => a.name.localeCompare(b.name))) add({ kind: 'fixture', id: f.id }, f.category);
+    for (const o of building.openings) add({ kind: 'opening', id: o.id }, o.kind);
+    for (const id of building.removedOpenings) add({ kind: 'opening', id }, 'removed', ' (removed)');
+    for (const o of building.soffits) add({ kind: 'soffit', id: o.id }, 'soffit');
+  }
+
+  // ---------- Open items ----------
+  const list = $('open-items');
+  function renderOpenItems() {
+    const openItems: OpenItem[] = [...building.openItems, ...fx.openItems];
+    $('open-count').textContent = String(openItems.length);
+    $('open-count').hidden = openItems.length === 0;
+    list.innerHTML = '';
+    if (!openItems.length) list.innerHTML = '<li>Nothing left to measure.</li>';
+    for (const it of openItems) {
+      const li = document.createElement('li');
+      li.innerHTML = `${escapeHtml(it.label)}<small>needs ${it.missing.join(', ')}</small>`;
+      li.addEventListener('click', () => {
+        const ref: Sel = it.kind === 'fixture' ? { kind: 'fixture', id: it.id } : it.kind === 'building' ? { kind: 'ceiling', id: 'ceiling' } : { kind: it.kind, id: it.id };
+        select(ref);
+        focusItem(ref);
+      });
+      list.append(li);
+    }
   }
 
   // ---------- Measure ----------
@@ -154,6 +602,8 @@ function start() {
     canvas.style.cursor = active ? 'crosshair' : rig.mode === 'walk' ? 'grab' : '';
   });
   measureBtn.addEventListener('click', () => {
+    splitStart = null;
+    $('split-wall').classList.remove('on');
     measure.setActive(!measure.active);
     if (measure.active) toast('Click two points on the floor, walls or equipment.');
   });
@@ -162,7 +612,6 @@ function start() {
 
   // ---------- Click to inspect / measure ----------
   const ray = new THREE.Raycaster();
-  const fixtureMeshes = fx.entries.map((e) => e.mesh);
   const isShown = (o: THREE.Object3D) => {
     for (let p: THREE.Object3D | null = o; p; p = p.parent) if (!p.visible) return false;
     return true;
@@ -172,7 +621,30 @@ function start() {
   canvas.addEventListener('pointerup', (e) => {
     if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
     ray.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
-    const hit = ray.intersectObjects([...building.pickables, ...fixtureMeshes], false).find((h) => isShown(h.object));
+    const hit = ray.intersectObjects([...building.pickables, ...building.itemPickables, ...fx.entries.map((e) => e.mesh)], false).find((h) => isShown(h.object) && (!h.object.userData.proxy || (!measure.active && !splitStart)));
+    if (splitStart && hit) {
+      const pt = { x: Math.round(hit.point.x), y: Math.round(-hit.point.z) };
+      if (splitStart === 'armed') {
+        splitStart = pt;
+        toast('Now click where it ends.');
+        return;
+      }
+      const a = splitStart;
+      const b = { ...pt };
+      if (Math.abs(b.y - a.y) < Math.abs(b.x - a.x) * 0.1) b.y = a.y;
+      else if (Math.abs(b.x - a.x) < Math.abs(b.y - a.y) * 0.1) b.x = a.x;
+      splitStart = null;
+      $('split-wall').classList.remove('on');
+      if (Math.hypot(b.x - a.x, b.y - a.y) < 2) { toast('Those points are the same. Try again.'); return; }
+      const under = hit.object.userData.item as BuildingItemRef | undefined;
+      const base = under?.kind === 'wall' ? building.walls.find((w) => w.id === under.id)?.height : under?.kind === 'section' ? building.sections.find((w) => w.id === under.id)?.height : undefined;
+      const id = nextId('section', cfg.wallSections!);
+      cfg.wallSections!.push({ id, a, b, width: 16, height: base ?? building.ceilingHeight });
+      sel = { kind: 'section', id };
+      commitBuilding();
+      toast('Section added. Set its height in the panel.');
+      return;
+    }
     if (measure.active) {
       if (!hit) return;
       const text = measure.addPoint(hit.point);
@@ -180,7 +652,87 @@ function start() {
       return;
     }
     const entry = hit ? fx.entries.find((f) => f.mesh === hit.object) : undefined;
-    select(entry ?? null);
+    const item = hit?.object.userData.item as BuildingItemRef | undefined;
+    select(entry ? { kind: 'fixture', id: entry.data.id } : item ?? null);
+  });
+
+  // ---------- Drag the selected fixture to move it ----------
+  const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const ndc = (e: PointerEvent) => new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  let drag: { entry: FixtureEntry; dx: number; dz: number; sx: number; sy: number; moved: boolean } | null = null;
+  let odrag: { id: string; sx: number; sy: number; moved: boolean; ghost: THREE.Mesh; at?: { x: number; y: number; angle: number } } | null = null;
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || measure.active || splitStart || rig.mode === 'walk') return;
+    if (sel?.kind === 'opening') {
+      const o = building.openings.find((x) => x.id === sel!.id);
+      ray.setFromCamera(ndc(e), camera);
+      const px = building.itemPickables.find((m) => m.userData.item?.id === sel!.id);
+      if (!o || !px || !ray.intersectObject(px, false).length) return;
+      const ghost = new THREE.Mesh(
+        new THREE.BoxGeometry(o.width, o.head - o.sill, o.depth),
+        new THREE.MeshBasicMaterial({ color: 0xffc400, transparent: true, opacity: 0.35, depthTest: false }),
+      );
+      ghost.renderOrder = 11;
+      ghost.position.copy(px.position);
+      ghost.rotation.copy(px.rotation);
+      scene.add(ghost);
+      odrag = { id: o.id, sx: e.clientX, sy: e.clientY, moved: false, ghost };
+      rig.orbit.enabled = false;
+      return;
+    }
+    if (!selected || !selected.group.visible) return;
+    ray.setFromCamera(ndc(e), camera);
+    if (!ray.intersectObject(selected.mesh, false).length) return;
+    const p = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(floorPlane, p)) return;
+    drag = { entry: selected, dx: selected.group.position.x - p.x, dz: selected.group.position.z - p.z, sx: e.clientX, sy: e.clientY, moved: false };
+    rig.orbit.enabled = false;
+  }, true);
+  addEventListener('pointermove', (e) => {
+    if (odrag) {
+      if (!odrag.moved && Math.hypot(e.clientX - odrag.sx, e.clientY - odrag.sy) < 4) return;
+      ray.setFromCamera(ndc(e), camera);
+      const p = new THREE.Vector3();
+      if (!ray.ray.intersectPlane(floorPlane, p)) return;
+      odrag.moved = true;
+      const snap = e.altKey ? null : snapToWall(p.x, -p.z, 36);
+      odrag.at = snap ?? { x: Math.round(p.x), y: Math.round(-p.z), angle: building.openings.find((x) => x.id === odrag!.id)!.angle };
+      odrag.ghost.position.x = odrag.at.x;
+      odrag.ghost.position.z = -odrag.at.y;
+      odrag.ghost.rotation.y = (odrag.at.angle * Math.PI) / 180;
+      return;
+    }
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
+    ray.setFromCamera(ndc(e), camera);
+    const p = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(floorPlane, p)) return;
+    drag.moved = true;
+    const step = e.shiftKey ? 6 : 1;
+    drag.entry.group.position.x = Math.round((p.x + drag.dx) / step) * step;
+    drag.entry.group.position.z = Math.round((p.z + drag.dz) / step) * step;
+  });
+  addEventListener('pointerup', () => {
+    if (odrag) {
+      const { id, moved, ghost, at } = odrag;
+      odrag = null;
+      scene.remove(ghost);
+      ghost.geometry.dispose();
+      rig.orbit.enabled = rig.mode !== 'walk';
+      if (!moved || !at) return;
+      const e = openingEntry(id);
+      e.x = at.x; e.y = at.y; e.angle = at.angle;
+      commitBuilding();
+      return;
+    }
+    if (!drag) return;
+    const { entry, moved } = drag;
+    drag = null;
+    rig.orbit.enabled = rig.mode !== 'walk';
+    if (!moved) return;
+    entry.data.x = Math.round(entry.group.position.x);
+    entry.data.y = Math.round(-entry.group.position.z);
+    commitFixtures();
   });
 
   // ---------- Modes and views ----------
@@ -209,7 +761,7 @@ function start() {
   const hint = $('hint');
   function renderHint(m: Mode) {
     const body: Record<Mode, string> = {
-      orbit: '<b>Drag</b> rotate · <b>Right-drag</b> pan · <b>Scroll</b> zoom<ul><li>Click equipment for details</li><li>Try <i>Walk</i> to stand inside</li></ul>',
+      orbit: '<b>Drag</b> rotate · <b>Right-drag</b> pan · <b>Scroll</b> zoom<ul><li>Click anything to inspect and edit it</li><li>Drag a selected fixture to move it (hold <b>Shift</b> for 6 in steps)</li><li>Drag a selected window or door along a wall (hold <b>Alt</b> to ignore walls)</li><li>Try <i>Walk</i> to stand inside</li></ul>',
       walk: '<b>W A S D</b> or <b>↑ ↓</b> move · <b>Drag</b> look around<ul><li><b>← →</b> turn · hold <b>Shift</b> to hurry</li><li>Pick <i>Orbit</i> to fly back out</li></ul>',
       plan: '<b>Drag</b> pan · <b>Scroll</b> zoom<ul><li>North is up</li><li>Click equipment for details</li></ul>',
     };
@@ -242,6 +794,7 @@ function start() {
   });
 
   // ---------- Loop ----------
+  refreshAll();
   applyVisibility();
   let toastTimer = 0;
   function toast(msg: string) {
@@ -261,7 +814,7 @@ function start() {
   });
 
   // Handy for debugging in the console and for the headless smoke test.
-  (window as unknown as Record<string, unknown>).__viewer = { rig, building, fx, camera, scene, dxf };
+  (window as unknown as Record<string, unknown>).__viewer = { rig, get building() { return building; }, get fx() { return fx; }, cfg, camera, scene, dxf };
 }
 
 function escapeHtml(s: string) {

@@ -37,9 +37,21 @@ button[hidden] { display: none; }
 #info { position: fixed; top: 74px; right: 10px; width: 290px; max-height: calc(100% - 90px); overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px 12px; box-shadow: 0 2px 10px rgba(0,0,0,.08); z-index: 4; }
 #info h2 { font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--ink); margin: 12px 24px 8px 0; }
 #info-close, #hint-close { position: absolute; top: 6px; right: 6px; border: 0; background: none; font-size: 20px; line-height: 1; padding: 2px 8px; }
-#info dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0; }
-#info dt { color: var(--muted); }
-#info dd { margin: 0; }
+#info .form { display: grid; grid-template-columns: 74px 1fr; gap: 5px 8px; align-items: center; }
+#info .form label { color: var(--muted); }
+#info .form input, #info .form select, #info .form textarea { font: inherit; width: 100%; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: #fff; }
+#info .form textarea { resize: vertical; min-height: 44px; }
+#info .form .full { grid-column: 1 / -1; }
+#info .form .actions { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 4px; }
+#info .form .danger { color: var(--accent); }
+#info .form .note { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+#side .tools { margin-bottom: 6px; }
+#side .tools button { padding: 3px 8px; font-size: 12px; }
+#items { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
+#items li { padding: 3px 6px; border-radius: 5px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }
+#items li:hover { background: #f4efe4; }
+#items li.sel { background: #ece6d4; font-weight: 600; }
+#items small { color: var(--muted); font-weight: 400; }
 #info .tbd { color: var(--tbd); font-weight: 600; }
 
 #hint { position: fixed; left: 10px; bottom: 10px; max-width: 360px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 34px 10px 12px; box-shadow: 0 2px 10px rgba(0,0,0,.08); z-index: 4; }

@@ -20,9 +20,27 @@ export interface BuildingConfig {
     /** Layer of block inserts to show as draft equipment boxes. */
     equipment?: string;
   };
-  /** `at` (plan inches) names the opening nearest that point, for drawings with no text labels. */
-  openings: { id: string; sill: number | null; head: number | null; at?: { x: number; y: number } }[];
-  soffits: { id: string; height: number | null }[];
+  /**
+   * Overrides for openings found in the DXF. `at` (plan inches) names the opening nearest that point,
+   * for drawings with no text labels. x/y/width/depth/angle move or resize it; `deleted` fills it in.
+   */
+  openings: (OpeningGeometry & { id: string; label?: string; sill: number | null; head: number | null; at?: Pt; deleted?: boolean })[];
+  soffits: { id: string; label?: string; height: number | null }[];
+  /** Per-wall overrides. Walls are the closed outlines on the walls layer, numbered wall-1, wall-2, ... */
+  walls?: { id: string; label?: string; height: number | null }[];
+  /** A stretch of wall (a to b, `width` across) with its own height. */
+  wallSections?: { id: string; label?: string; a: Pt; b: Pt; width: number; height: number }[];
+  /** Openings added in the viewer. Centre x/y, width along `angle`, depth through the wall. */
+  customOpenings?: (Required<OpeningGeometry> & { id: string; kind: 'door' | 'window'; label?: string; sill: number; head: number })[];
+}
+
+export interface OpeningGeometry {
+  x?: number;
+  y?: number;
+  width?: number;
+  depth?: number;
+  /** Degrees counter-clockwise from east: the direction the opening's width runs. */
+  angle?: number;
 }
 
 export type Category =

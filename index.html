@@ -37,6 +37,20 @@
         <label class="row"><input type="checkbox" id="t-draft" checked /> AL draft equipment</label>
       </section>
       <section>
+        <h2>Items</h2>
+        <div class="group tools">
+          <button id="add-item" title="Add a new fixture in front of the camera">+ Fixture</button>
+          <button id="add-opening" title="Add a door or window on the nearest wall">+ Opening</button>
+          <button id="split-wall" title="Click two points along a wall to give that stretch its own height">Split wall</button>
+        </div>
+        <ul id="items"></ul>
+      </section>
+      <section>
+        <h2>Layout edits <span id="edited" class="badge" hidden>local</span></h2>
+        <p class="muted">Edits are saved in this browser. Export to put them in <code>data/</code>.</p>
+        <div class="group"><button id="export">Export JSON</button><button id="reset">Reset</button></div>
+      </section>
+      <section>
         <h2>Open items <span id="open-count" class="badge"></span></h2>
         <p class="muted">Values still marked TBD. Click one to find it.</p>
         <ul id="open-items"></ul>
@@ -46,7 +60,7 @@
     <aside id="info" hidden>
       <button id="info-close" aria-label="Close">×</button>
       <h2 id="info-name"></h2>
-      <dl id="info-body"></dl>
+      <div id="info-body" class="form"></div>
     </aside>
 
     <div id="hint">
