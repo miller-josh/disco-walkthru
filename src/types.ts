@@ -18,7 +18,8 @@ export interface BuildingConfig {
     soffits: string;
     annotation?: string;
   };
-  openings: { id: string; sill: number | null; head: number | null }[];
+  /** `at` (plan inches) names the opening nearest that point, for drawings with no text labels. */
+  openings: { id: string; sill: number | null; head: number | null; at?: { x: number; y: number } }[];
   soffits: { id: string; height: number | null }[];
 }
 

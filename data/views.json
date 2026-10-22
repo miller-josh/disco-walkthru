@@ -1,6 +1,62 @@
 [
-  { "id": "front-door", "name": "Front door", "mode": "walk", "eye": { "x": 280, "y": 24, "z": 66 }, "target": { "x": 280, "y": 200, "z": 60 } },
-  { "id": "dining-room", "name": "Dining room", "mode": "walk", "eye": { "x": 40, "y": 40, "z": 66 }, "target": { "x": 300, "y": 220, "z": 50 } },
-  { "id": "pizza-line", "name": "Pizza line", "mode": "walk", "eye": { "x": 440, "y": 40, "z": 66 }, "target": { "x": 640, "y": 200, "z": 40 } },
-  { "id": "drive-thru-window", "name": "Drive-thru window", "mode": "walk", "eye": { "x": 640, "y": 274, "z": 66 }, "target": { "x": 720, "y": 274, "z": 60 } }
+  {
+    "id": "storefront",
+    "name": "Storefront",
+    "mode": "walk",
+    "eye": {
+      "x": 200,
+      "y": -20,
+      "z": 66
+    },
+    "target": {
+      "x": 200,
+      "y": 200,
+      "z": 60
+    }
+  },
+  {
+    "id": "dining-room",
+    "name": "Dining room",
+    "mode": "walk",
+    "eye": {
+      "x": 300,
+      "y": 30,
+      "z": 66
+    },
+    "target": {
+      "x": 200,
+      "y": 250,
+      "z": 50
+    }
+  },
+  {
+    "id": "kitchen",
+    "name": "Kitchen",
+    "mode": "walk",
+    "eye": {
+      "x": 180,
+      "y": 420,
+      "z": 66
+    },
+    "target": {
+      "x": 250,
+      "y": 600,
+      "z": 50
+    }
+  },
+  {
+    "id": "back-door",
+    "name": "Back door",
+    "mode": "walk",
+    "eye": {
+      "x": 234,
+      "y": 600,
+      "z": 66
+    },
+    "target": {
+      "x": 234,
+      "y": 700,
+      "z": 60
+    }
+  }
 ]

@@ -28,7 +28,8 @@ npm run build      # static site in dist/
 2. Edit `data/building.json` and `data/fixtures.json` by hand, or ask Claude Code ("move the three-comp sink 18 inches north", "add a 48-inch reach-in next to the prep table").
 3. Commit and push. The host rebuilds and the same URL shows the new layout.
 
-> The `data/base.dxf` in the repo is a **placeholder** (a 60 ft x 36 ft box with made-up doors and windows) so the viewer runs. Replace it with the real export. `npm run sample-dxf` regenerates the placeholder. The saved views in `views.json` are aimed at the placeholder too.
+> `data/base.dxf` is the master DXF for 910 OH-28 (walls from Josh's plan plus AL's equipment on `AL_*` layers, real inches, origin at the southwest exterior corner). The viewer reads `WALLS`, `DOORS` and `WINDOWS` from it. Door swings (arc plus leaf) are collapsed to one opening each, and touching window pieces are merged. Windows have no text labels, so `building.json` names them with an `at` point (plan inches). `tools/dxf/` holds the scripts that rebuild the master from the ArcSite PDF and AL's DWG. `npm run sample-dxf` still regenerates the old placeholder box.
+> Not read yet: `FIXTURES`, `COUNTERS` and the `AL_*` equipment. `data/fixtures.json` positions are still `null` until AL's A1 to A21 schedule arrives. The saved views are rough starting points.
 
 ### Units and orientation
 

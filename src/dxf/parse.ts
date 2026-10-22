@@ -150,6 +150,67 @@ function footprintOf(e: RawEntity, depth: number): { rect: Pt[]; center: Pt } | 
   return { rect, center: at((u0 + u1) / 2, vc) };
 }
 
+type Box = { x0: number; y0: number; x1: number; y1: number };
+const boxOf = (pts: Pt[]): Box => ({
+  x0: Math.min(...pts.map((p) => p.x)), y0: Math.min(...pts.map((p) => p.y)),
+  x1: Math.max(...pts.map((p) => p.x)), y1: Math.max(...pts.map((p) => p.y)),
+});
+const touch = (a: Box, b: Box, tol = 1.5) => a.x0 <= b.x1 + tol && b.x0 <= a.x1 + tol && a.y0 <= b.y1 + tol && b.y0 <= a.y1 + tol;
+const rectOf = (b: Box): Pt[] => [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }, { x: b.x0, y: b.y1 }];
+
+/**
+ * Master DXFs traced from a plan draw a door as a swing arc (a polyline with many
+ * vertices) plus a two-point leaf, and a window as several touching pieces. Collapse
+ * each to one thing the rest of the parser understands: a door becomes a line across
+ * its opening (hinge to latch), a window becomes one rectangle. Entities without arcs
+ * (hand-drawn single lines or rectangles) pass through untouched.
+ */
+function tidyArcSketches(raw: RawEntity[]): RawEntity[] {
+  const out: RawEntity[] = [];
+  const doors = raw.filter((e) => e.kind === 'door');
+  const arcs = doors.filter((e) => e.axis === undefined && !e.closed && e.pts.length > 4);
+  const used = new Set<RawEntity>();
+  const swingBoxes: Box[] = [];
+  for (const arc of arcs) {
+    const b = boxOf(arc.pts);
+    const leaves = doors.filter((e) => e !== arc && e.pts.length === 2 && touch(boxOf(e.pts), b, 0.5));
+    if (!leaves.length) continue;
+    const side = Math.min(b.x1 - b.x0, b.y1 - b.y0);
+    const ends = [arc.pts[0], arc.pts[arc.pts.length - 1]];
+    // The leaf swings about the box corner that neither arc end sits on.
+    const hinge = rectOf(b).find((c) => ends.every((e) => Math.hypot(e.x - c.x, e.y - c.y) > side * 0.5));
+    if (!hinge) continue;
+    // The latch is the arc end on the same box side as the hinge, along the wall (not the leaf).
+    const leafAlongY = leaves.every((l) => Math.abs(l.pts[0].x - l.pts[1].x) < 2);
+    const latch = ends.find((e) => (leafAlongY ? Math.abs(e.y - hinge.y) < 2 : Math.abs(e.x - hinge.x) < 2));
+    if (!latch) continue;
+    leaves.forEach((l) => used.add(l));
+    used.add(arc);
+    swingBoxes.push(b);
+    out.push({ ...arc, pts: [hinge, latch], closed: false });
+  }
+  for (const e of raw) if (!used.has(e) && e.kind !== 'window') out.push(e);
+
+  // Windows: merge touching pieces, drop slivers and jamb ticks that belong to a door swing.
+  const wins = raw.filter((e) => e.kind === 'window');
+  const seen = new Set<RawEntity>();
+  for (const w of wins) {
+    if (seen.has(w)) continue;
+    const group = [w];
+    seen.add(w);
+    for (let i = 0; i < group.length; i++) {
+      const gb = boxOf(group[i].pts);
+      for (const o of wins) if (!seen.has(o) && touch(gb, boxOf(o.pts), 0.1)) { seen.add(o); group.push(o); }
+    }
+    if (group.some((g) => g.axis !== undefined)) { out.push(...group); continue; }
+    const b = boxOf(group.flatMap((g) => g.pts));
+    if (Math.max(b.x1 - b.x0, b.y1 - b.y0) < 12) continue;
+    if (swingBoxes.some((sb) => touch(sb, b, 0.5))) continue;
+    out.push({ ...w, pts: rectOf(b), closed: true });
+  }
+  return out;
+}
+
 export function parseDxf(text: string, cfg: BuildingConfig): ParsedDxf {
   const warnings: string[] = [];
   const dxf = new DxfParser().parseSync(text);
@@ -202,6 +263,9 @@ export function parseDxf(text: string, cfg: BuildingConfig): ParsedDxf {
       });
     }
   }
+  const tidy = tidyArcSketches(raw);
+  raw.length = 0;
+  raw.push(...tidy);
   for (const [what, n] of skipped) warnings.push(`Ignored ${n} unsupported entit${n > 1 ? 'ies' : 'y'} (${what}). Use lines or polylines.`);
 
   // Only labels that name something count as IDs. Room names etc. are ignored.
@@ -227,8 +291,24 @@ export function parseDxf(text: string, cfg: BuildingConfig): ParsedDxf {
   });
   pairs.sort((a, b) => a.d - b.d);
   const idOf = new Map<number, string>();
+  // Config entries with an `at` point claim the closest opening, for drawings with no text labels.
+  const anchored: { i: number; id: string; d: number }[] = [];
+  for (const o of cfg.openings) {
+    if (!o.at) continue;
+    raw.forEach((e, i) => {
+      const c = geom[i]?.center;
+      if (c && e.kind !== 'soffit' && dist(c, o.at!) <= radius) anchored.push({ i, id: o.id, d: dist(c, o.at!) });
+    });
+  }
+  anchored.sort((a, b) => a.d - b.d);
+  const claimed = new Set<string>();
+  for (const a of anchored) {
+    if (idOf.has(a.i) || claimed.has(a.id)) continue;
+    idOf.set(a.i, a.id);
+    claimed.add(a.id);
+  }
   for (const p of pairs) {
-    if (idOf.has(p.i) || idLabels[p.l].used) continue;
+    if (idOf.has(p.i) || idLabels[p.l].used || claimed.has(slug(idLabels[p.l].text))) continue;
     idOf.set(p.i, slug(idLabels[p.l].text));
     idLabels[p.l].used = true;
   }

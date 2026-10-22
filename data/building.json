@@ -11,11 +11,24 @@
     "annotation": "ANNOTATION"
   },
   "openings": [
-    { "id": "storefront-1", "sill": null, "head": null },
-    { "id": "storefront-2", "sill": null, "head": null },
-    { "id": "drive-thru", "sill": null, "head": null }
+    {
+      "id": "storefront-window",
+      "sill": null,
+      "head": null,
+      "at": {
+        "x": 208,
+        "y": 2
+      }
+    },
+    {
+      "id": "west-window",
+      "sill": null,
+      "head": null,
+      "at": {
+        "x": 2,
+        "y": 362
+      }
+    }
   ],
-  "soffits": [
-    { "id": "soffit-1", "height": null }
-  ]
+  "soffits": []
 }
