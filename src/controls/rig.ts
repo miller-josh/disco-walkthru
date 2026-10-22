@@ -177,6 +177,10 @@ export class Rig {
     if (this.mode === 'walk') this.dom.style.cursor = 'grab';
   };
 
+  setCollision(collision: number[][]) {
+    this.collision = collision;
+  }
+
   private collides(x: number, y: number): boolean {
     for (const s of this.collision) {
       if (distToSegment(x, y, s).d < BODY_RADIUS) return true;

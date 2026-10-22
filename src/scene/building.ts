@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import polygonClipping, { type MultiPolygon, type Polygon, type Ring } from 'polygon-clipping';
 import type { BuildingConfig, OpenItem, Pt } from '../types';
 import type { ParsedDxf } from '../dxf/parse';
@@ -26,6 +27,15 @@ export interface BuildingModel {
   pickables: THREE.Object3D[];
   openItems: OpenItem[];
   warnings: string[];
+  /** Resolved openings and soffits, so the editor can show defaults and find them. */
+  openings: { id: string; kind: 'door' | 'window'; sill: number; head: number; center: Pt }[];
+  soffits: { id: string; height: number; center: Pt }[];
+}
+
+/** What a clicked building mesh stands for. */
+export interface BuildingItemRef {
+  kind: 'wall' | 'opening' | 'soffit';
+  id: string;
 }
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -55,7 +65,7 @@ function segmentRect(a: Pt, b: Pt, t: number): Polygon | null {
   ])];
 }
 
-function extrude(mp: MultiPolygon, z0: number, z1: number, material: THREE.Material, edgeColor: number | null, into: THREE.Group, pick: THREE.Object3D[]) {
+function extrude(mp: MultiPolygon, z0: number, z1: number, material: THREE.Material, edgeColor: number | null, into: THREE.Group, pick: THREE.Object3D[], item?: BuildingItemRef) {
   for (const poly of mp) {
     const ring = (r: Ring) => r.slice(0, -1).map(([x, y]) => new THREE.Vector2(x, y));
     const shape = new THREE.Shape(ring(poly[0]));
@@ -65,6 +75,7 @@ function extrude(mp: MultiPolygon, z0: number, z1: number, material: THREE.Mater
     geo.rotateX(-Math.PI / 2);
     geo.translate(0, z0, 0);
     const mesh = new THREE.Mesh(geo, material);
+    if (item) mesh.userData.item = item;
     into.add(mesh);
     pick.push(mesh);
     if (edgeColor !== null) {
@@ -79,6 +90,16 @@ export function buildBuilding(cfg: BuildingConfig, dxf: ParsedDxf): BuildingMode
   const pickables: THREE.Object3D[] = [];
   const openItems: OpenItem[] = [];
   const warnings = [...dxf.warnings];
+
+  const addLabel = (text: string | undefined, c: Pt, y: number) => {
+    if (!text) return;
+    const el = document.createElement('div');
+    el.className = 'fx-label';
+    el.textContent = text;
+    const l = new CSS2DObject(el);
+    l.position.set(c.x, y, -c.y);
+    group.add(l);
+  };
 
   const ceilingH = cfg.ceilingHeight ?? DEFAULT_CEILING;
   if (cfg.ceilingHeight == null) openItems.push({ id: 'building', kind: 'building', label: 'Building', missing: ['finished ceiling height'] });
@@ -136,6 +157,7 @@ export function buildBuilding(cfg: BuildingConfig, dxf: ParsedDxf): BuildingMode
     }
     head = Math.min(head, ceilingH);
     sill = Math.max(0, Math.min(sill, head - 1));
+    addLabel(entry?.label, o.center, head + 6);
     return { id: o.id, kind: o.kind, sill, head, placeholder, footprint: o.footprint, center: o.center };
   });
   for (const e of cfg.openings) if (!dxf.openings.some((o) => o.id === e.id)) warnings.push(`building.json lists opening "${e.id}" but no matching entity was found in the DXF.`);
@@ -146,13 +168,14 @@ export function buildBuilding(cfg: BuildingConfig, dxf: ParsedDxf): BuildingMode
   const wallEdge = 0x8a867c;
   const footprints = resolved.map((o) => [toRing(o.footprint)] as Polygon);
   const body: MultiPolygon = footprints.length ? polygonClipping.difference(wallMP, ...footprints) : wallMP;
-  extrude(body, 0, ceilingH, wallMat, wallEdge, group, pickables);
+  extrude(body, 0, ceilingH, wallMat, wallEdge, group, pickables, { kind: 'wall', id: 'walls' });
   resolved.forEach((o, i) => {
     let zone: MultiPolygon = polygonClipping.intersection(wallMP, footprints[i]);
     if (i > 0 && zone.length) zone = polygonClipping.difference(zone, ...footprints.slice(0, i));
     if (!zone.length) return;
-    if (o.sill > 0.01) extrude(zone, 0, o.sill, wallMat, wallEdge, group, pickables);
-    if (o.head < ceilingH - 0.01) extrude(zone, o.head, ceilingH, wallMat, wallEdge, group, pickables);
+    const ref: BuildingItemRef = { kind: 'opening', id: o.id };
+    if (o.sill > 0.01) extrude(zone, 0, o.sill, wallMat, wallEdge, group, pickables, ref);
+    if (o.head < ceilingH - 0.01) extrude(zone, o.head, ceilingH, wallMat, wallEdge, group, pickables, ref);
   });
 
   // Walk collision: everything solid at floor level. Only openings that reach the floor (doors) are passable.
@@ -179,19 +202,27 @@ export function buildBuilding(cfg: BuildingConfig, dxf: ParsedDxf): BuildingMode
     const glass = new THREE.Mesh(new THREE.PlaneGeometry(len, h), glassMat);
     glass.position.set(o.center.x, (o.sill + o.head) / 2, -o.center.y);
     glass.rotation.y = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+    glass.userData.item = { kind: 'opening', id: o.id } satisfies BuildingItemRef;
     group.add(glass);
+    pickables.push(glass);
     glass.add(new THREE.LineSegments(new THREE.EdgesGeometry(glass.geometry), new THREE.LineBasicMaterial({ color: o.placeholder ? 0xd9822b : 0x5b8db8 })));
   }
 
   // ---- Soffits: bulkheads hanging from the ceiling ----
+  const soffitInfo: BuildingModel['soffits'] = [];
   for (const s of dxf.soffits) {
     const entry = cfg.soffits.find((e) => e.id === s.id);
     const h = entry?.height ?? ceilingH - DEFAULT_SOFFIT_DROP;
     const placeholder = entry?.height == null;
     if (placeholder) openItems.push({ id: s.id, kind: 'soffit', label: `Soffit "${s.id}"${entry ? '' : ' (add to building.json)'}`, missing: ['soffit height'] });
+    const sx = s.outline.map((p) => p.x);
+    const sy = s.outline.map((p) => p.y);
+    const sc = { x: (Math.min(...sx) + Math.max(...sx)) / 2, y: (Math.min(...sy) + Math.max(...sy)) / 2 };
+    soffitInfo.push({ id: s.id, height: h, center: sc });
+    addLabel(entry?.label, sc, Math.min(h, ceilingH) - 6);
     if (h >= ceilingH) continue;
     const mat = new THREE.MeshLambertMaterial({ color: placeholder ? 0xf0b36a : 0xc9c4b8, transparent: placeholder, opacity: placeholder ? 0.6 : 1 });
-    extrude([[toRing(s.outline)]], Math.max(0, h), ceilingH, mat, 0x6f6b61, group, pickables);
+    extrude([[toRing(s.outline)]], Math.max(0, h), ceilingH, mat, 0x6f6b61, group, pickables, { kind: 'soffit', id: s.id });
   }
 
   // ---- Floor with a 1 ft grid ----
@@ -220,5 +251,9 @@ export function buildBuilding(cfg: BuildingConfig, dxf: ParsedDxf): BuildingMode
   ceiling.visible = false;
   group.add(ceiling);
 
-  return { group, ceiling, bounds, ceilingHeight: ceilingH, collision, pickables, openItems, warnings };
+  return {
+    group, ceiling, bounds, ceilingHeight: ceilingH, collision, pickables, openItems, warnings,
+    openings: resolved.map((o) => ({ id: o.id, kind: o.kind, sill: o.sill, head: o.head, center: o.center })),
+    soffits: soffitInfo,
+  };
 }
