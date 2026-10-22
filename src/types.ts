@@ -17,6 +17,8 @@ export interface BuildingConfig {
     windows: string;
     soffits: string;
     annotation?: string;
+    /** Layer of block inserts to show as draft equipment boxes. */
+    equipment?: string;
   };
   /** `at` (plan inches) names the opening nearest that point, for drawings with no text labels. */
   openings: { id: string; sill: number | null; head: number | null; at?: { x: number; y: number } }[];

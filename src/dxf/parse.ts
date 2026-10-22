@@ -22,8 +22,21 @@ export interface DxfSoffit {
   outline: Pt[];
 }
 
+/** A block insert on the equipment layer, reduced to its plan footprint. */
+export interface DxfEquipment {
+  block: string;
+  /** Four corners of the oriented footprint, plan inches. */
+  footprint: Pt[];
+  center: Pt;
+  width: number;
+  depth: number;
+  /** Degrees counter-clockwise, as drawn. */
+  rotation: number;
+}
+
 export interface ParsedDxf {
   walls: WallShape[];
+  equipment: DxfEquipment[];
   openings: DxfOpening[];
   soffits: DxfSoffit[];
   warnings: string[];
@@ -211,6 +224,21 @@ function tidyArcSketches(raw: RawEntity[]): RawEntity[] {
   return out;
 }
 
+function equipmentOf(e: Ent, blocks: Record<string, Ent>, k: number): DxfEquipment | null {
+  const rot = ((e.rotation ?? 0) * Math.PI) / 180;
+  // Measure the block in its own (unrotated) frame, then rotate the box into place.
+  const local = entityPoints({ ...e, rotation: 0, position: { x: 0, y: 0 } }, blocks);
+  if (!local.length) return null;
+  const x0 = Math.min(...local.map((p) => p.x)), x1 = Math.max(...local.map((p) => p.x));
+  const y0 = Math.min(...local.map((p) => p.y)), y1 = Math.max(...local.map((p) => p.y));
+  const c = Math.cos(rot), s = Math.sin(rot);
+  const put = (x: number, y: number): Pt => ({ x: (e.position.x + x * c - y * s) * k, y: (e.position.y + x * s + y * c) * k });
+  const footprint = [put(x0, y0), put(x1, y0), put(x1, y1), put(x0, y1)];
+  const width = (x1 - x0) * k, depth = (y1 - y0) * k;
+  if (width < 1 || depth < 1) return null;
+  return { block: String(e.name), footprint, center: put((x0 + x1) / 2, (y0 + y1) / 2), width, depth, rotation: e.rotation ?? 0 };
+}
+
 export function parseDxf(text: string, cfg: BuildingConfig): ParsedDxf {
   const warnings: string[] = [];
   const dxf = new DxfParser().parseSync(text);
@@ -225,6 +253,7 @@ export function parseDxf(text: string, cfg: BuildingConfig): ParsedDxf {
   const knownIds = new Set([...openingIds, ...soffitIds]);
 
   const walls: WallShape[] = [];
+  const equipment: DxfEquipment[] = [];
   const raw: RawEntity[] = [];
   const labels: Label[] = [];
   const skipped = new Map<string, number>();
@@ -235,6 +264,11 @@ export function parseDxf(text: string, cfg: BuildingConfig): ParsedDxf {
       const at = e.type === 'TEXT' ? e.startPoint : e.position;
       const t = cleanText(e.text ?? '');
       if (at && t) labels.push({ text: t, at: { x: at.x * k, y: at.y * k }, used: false });
+      continue;
+    }
+    if (L.equipment && same(layer, L.equipment) && e.type === 'INSERT') {
+      const eq = equipmentOf(e, blocks, k);
+      if (eq) equipment.push(eq);
       continue;
     }
     let kind: 'wall' | RawEntity['kind'] | null = null;
@@ -339,5 +373,5 @@ export function parseDxf(text: string, cfg: BuildingConfig): ParsedDxf {
     }
   });
 
-  return { walls, openings, soffits, warnings };
+  return { walls, equipment, openings, soffits, warnings };
 }

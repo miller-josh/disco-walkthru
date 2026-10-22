@@ -29,7 +29,7 @@ npm run build      # static site in dist/
 3. Commit and push. The host rebuilds and the same URL shows the new layout.
 
 > `data/base.dxf` is the master DXF for 910 OH-28 (walls from Josh's plan plus AL's equipment on `AL_*` layers, real inches, origin at the southwest exterior corner). The viewer reads `WALLS`, `DOORS` and `WINDOWS` from it. Door swings (arc plus leaf) are collapsed to one opening each, and touching window pieces are merged. Windows have no text labels, so `building.json` names them with an `at` point (plan inches). `tools/dxf/` holds the scripts that rebuild the master from the ArcSite PDF and AL's DWG. `npm run sample-dxf` still regenerates the old placeholder box.
-> Not read yet: `FIXTURES`, `COUNTERS` and the `AL_*` equipment. `data/fixtures.json` positions are still `null` until AL's A1 to A21 schedule arrives. The saved views are rough starting points.
+> AL's `AL_EQUIPMENT` inserts are drawn as translucent purple footprint boxes (toggle: "AL draft equipment"). Heights are guesses by block name, in `src/scene/draft.ts`. They are not clickable and not in `fixtures.json`. `FIXTURES` and `COUNTERS` are not read yet. `data/fixtures.json` positions are still `null` until AL's A1 to A21 schedule arrives. The saved views are rough starting points.
 
 ### Units and orientation
 

@@ -7,6 +7,7 @@ import viewsJson from '../data/views.json';
 import './style.css';
 import { parseDxf } from './dxf/parse';
 import { buildBuilding } from './scene/building';
+import { buildDraftEquipment } from './scene/draft';
 import { buildFixtures, CATEGORIES, CATEGORY_COLORS, setSelected, type FixtureEntry } from './scene/fixtures';
 import { Rig, type Mode } from './controls/rig';
 import { MeasureTool } from './ui/measure';
@@ -46,7 +47,8 @@ function start() {
   const sun = new THREE.DirectionalLight(0xffffff, 0.9);
   sun.position.set(-300, 600, 400);
   scene.add(sun);
-  scene.add(building.group, fx.group);
+  const draft = buildDraftEquipment(dxf.equipment);
+  scene.add(building.group, fx.group, draft);
 
   // ---------- Renderers ----------
   const canvas = $<HTMLCanvasElement>('scene');
@@ -95,6 +97,7 @@ function start() {
   }
   $<HTMLInputElement>('t-future').addEventListener('change', (e) => { futureOn = (e.target as HTMLInputElement).checked; applyVisibility(); });
   $<HTMLInputElement>('t-labels').addEventListener('change', (e) => { labelsOn = (e.target as HTMLInputElement).checked; applyVisibility(); });
+  $<HTMLInputElement>('t-draft').addEventListener('change', (e) => { draft.visible = (e.target as HTMLInputElement).checked; });
   $<HTMLInputElement>('t-ceiling').addEventListener('change', (e) => { building.ceiling.visible = (e.target as HTMLInputElement).checked; });
 
   // ---------- Selection panel ----------
